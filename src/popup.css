@@ -1,0 +1,127 @@
+:root {
+  --bg: #14161c;
+  --panel: #1d212b;
+  --panel-2: #262b38;
+  --text: #e8ebf2;
+  --muted: #98a1b3;
+  --accent: #3b82f6;
+  --accent-2: #2563eb;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --danger: #f87171;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 340px;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  background: linear-gradient(120deg, #1c2433, #14161c);
+  border-bottom: 1px solid #000;
+}
+
+.logo {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: linear-gradient(160deg, var(--accent), var(--accent-2));
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+}
+
+h1 {
+  font-size: 14px;
+  font-weight: 650;
+  margin: 0;
+  letter-spacing: 0.2px;
+}
+
+main {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.status {
+  color: var(--muted);
+  padding: 6px 0;
+}
+
+label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+select {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--panel-2);
+  font-size: 13px;
+  appearance: none;
+}
+
+.meta {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.test {
+  font-size: 12.5px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--panel-2);
+  color: var(--muted);
+  line-height: 1.4;
+}
+.test.ok { color: var(--ok); border-color: rgba(52, 211, 153, 0.3); }
+.test.warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.3); }
+
+button.primary {
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 9px;
+  background: linear-gradient(160deg, var(--accent), var(--accent-2));
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: transform 0.06s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+}
+button.primary:hover { box-shadow: 0 8px 22px rgba(37, 99, 235, 0.5); }
+button.primary:active { transform: translateY(1px); }
+button.primary:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
+
+.hint {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.hidden { display: none !important; }

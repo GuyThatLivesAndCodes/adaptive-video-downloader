@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.42l2.3 2.3V4a1 1 0 0 1 1-1ZM5 18a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z"/></svg>
+    </div>
+    <h1>Adaptive Video Downloader</h1>
+  </header>
+
+  <main>
+    <div id="status" class="status">Scanning network activity&hellip;</div>
+
+    <div id="streamWrap" class="hidden">
+      <label for="streamSel">Detected video</label>
+      <select id="streamSel"></select>
+      <div id="meta" class="meta"></div>
+    </div>
+
+    <div id="testResult" class="test hidden"></div>
+
+    <button id="downloadBtn" class="primary hidden">Download video</button>
+
+    <p id="hint" class="hint hidden">
+      Open or play a video on this page, wait a moment, then reopen this popup.
+    </p>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

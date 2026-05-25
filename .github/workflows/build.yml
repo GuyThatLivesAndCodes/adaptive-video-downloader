@@ -1,0 +1,40 @@
+name: Build extension
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build Chrome + Firefox packages
+        run: bash build.sh
+
+      - name: Upload Chrome package
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-video-downloader-chrome
+          path: dist/artifacts/*-chrome-*.zip
+          if-no-files-found: error
+
+      - name: Upload Firefox package
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-video-downloader-firefox
+          path: |
+            dist/artifacts/*-firefox-*.zip
+            dist/artifacts/*-firefox-*.xpi
+          if-no-files-found: error
