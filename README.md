@@ -31,6 +31,12 @@ every segment of a video and merges them back into a single playable file.
 
    Downloading runs in a real tab (not the popup) so it keeps going even if you
    click away, and a **Stop & save** button lets you keep a partial video.
+5. **Convert to MP4 (optional)** — once the `.ts` is saved, press **Convert to
+   MP4**. The bundled [mux.js](https://github.com/videojs/mux.js) losslessly
+   remuxes the MPEG-TS into an `.mp4` (container change only — **no
+   re-encoding**, so it's fast and quality is identical). The result plays in
+   browsers, VLC, QuickTime, and mobile players. Works for standard H.264 video
+   + AAC audio HLS streams.
 
 ### Example segment URLs
 
@@ -94,7 +100,8 @@ artifacts (`adaptive-video-downloader-chrome` and
 src/
   background.js     network logging + per-tab segment store (SW / event page)
   popup.html/.css/.js   scan, random test, download button
-  progress.html/.css/.js  fetch seg-1..3000, retry, merge, save
+  progress.html/.css/.js  fetch seg-1..3000, retry, merge, save, convert
+  vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0)
   icons/            generated PNGs
 manifest.chrome.json   Manifest V3 (Chrome)
 manifest.firefox.json  Manifest V2 (Firefox)
@@ -107,7 +114,12 @@ build.sh               packages both browsers
 ## Notes & limitations
 
 - Segments are merged in memory, so extremely long videos (toward the 3000-cap)
-  can use a lot of RAM.
+  can use a lot of RAM. MP4 conversion holds both the source and output in
+  memory while remuxing.
+- **MP4 output is a fragmented MP4** (fMP4). It plays everywhere modern; a few
+  legacy desktop tools prefer progressive MP4. Only H.264/AAC streams can be
+  remuxed — other codecs (e.g. HEVC) keep the `.ts`.
+- To refresh the bundled remuxer: `npm install` then `npm run vendor`.
 - Works for token-signed CDN segments that don't require the original page's
   `Referer`/`Origin`.
 - This is a general media tool. Only download content you have the right to.

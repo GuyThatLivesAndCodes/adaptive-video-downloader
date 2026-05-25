@@ -109,6 +109,16 @@ a.save {
   box-shadow: 0 6px 16px rgba(16, 185, 129, 0.35);
 }
 
+button.convert {
+  background: linear-gradient(160deg, var(--accent), var(--accent-2));
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.35);
+}
+button.convert:hover { box-shadow: 0 8px 22px rgba(37, 99, 235, 0.5); }
+button.convert:disabled { opacity: 0.6; cursor: default; box-shadow: none; }
+
+#convStat { margin-top: 12px; }
+
 .log {
   margin-top: 20px;
   max-height: 190px;

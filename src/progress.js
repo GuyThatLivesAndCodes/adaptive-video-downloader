@@ -19,7 +19,9 @@ let failedAt = Infinity;
 const data = []; // data[n] = Uint8Array
 let fetchedCount = 0;
 let highestTried = 0;
-let objectUrl = null;
+const objectUrls = [];
+let finalParts = null; // the merged TS segments, kept for optional MP4 conversion
+let baseName = 'video';
 
 function logLine(text) {
   const d = document.createElement('div');
@@ -110,23 +112,25 @@ function finalize(startTime) {
     return;
   }
 
+  baseName = sanitize(label);
+  finalParts = parts;
+
   const blob = new Blob(parts, { type: 'video/mp2t' });
-  const fname = sanitize(label) + '.ts';
-  objectUrl = URL.createObjectURL(blob);
+  const fname = baseName + '.ts';
+  const url = URL.createObjectURL(blob);
+  objectUrls.push(url);
 
   // Trigger the download automatically…
-  const a = document.createElement('a');
-  a.href = objectUrl;
-  a.download = fname;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  triggerDownload(url, fname);
 
   // …and expose a button as a fallback (in case the auto-download is blocked).
   const link = $('saveLink');
-  link.href = objectUrl;
+  link.href = url;
   link.download = fname;
   link.classList.remove('hidden');
+
+  // Offer lossless MP4 conversion (remux of the .ts we just built).
+  $('convertBtn').classList.remove('hidden');
 
   const secs = ((Date.now() - startTime) / 1000).toFixed(0);
   const mb = (blob.size / 1048576).toFixed(1);
@@ -170,14 +174,98 @@ async function run() {
   finalize(startTime);
 }
 
+function triggerDownload(url, filename) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+function convStatus(text, isError) {
+  const el = $('convStat');
+  el.textContent = text;
+  el.style.color = isError ? 'var(--danger)' : 'var(--muted)';
+}
+
+// Remux the merged MPEG-TS into a (fragmented) MP4 with mux.js — no re-encoding.
+async function convertToMp4() {
+  if (!finalParts || finalParts.length === 0) return;
+  if (typeof muxjs === 'undefined' || !muxjs.Transmuxer) {
+    convStatus('MP4 converter did not load.', true);
+    return;
+  }
+
+  const btn = $('convertBtn');
+  btn.disabled = true;
+  btn.textContent = 'Converting…';
+
+  const transmuxer = new muxjs.Transmuxer({ remux: true });
+  const out = [];
+  let init = null;
+  let sawData = false;
+  transmuxer.on('data', (seg) => {
+    sawData = true;
+    if (init === null) {
+      init = seg.initSegment; // moov + track definitions (once)
+      out.push(init);
+    }
+    out.push(seg.data); // moof + mdat fragments
+  });
+
+  try {
+    for (let i = 0; i < finalParts.length; i++) {
+      transmuxer.push(finalParts[i]);
+      if (i % 25 === 0) {
+        convStatus(`Remuxing to MP4… ${i + 1}/${finalParts.length} segments`);
+        await new Promise((r) => setTimeout(r)); // yield so the UI stays responsive
+      }
+    }
+    convStatus('Finalizing MP4…');
+    await new Promise((r) => setTimeout(r));
+    transmuxer.flush(); // emits the data + done events synchronously
+  } catch (e) {
+    convStatus('Conversion failed: ' + (e && e.message ? e.message : e), true);
+    btn.disabled = false;
+    btn.textContent = 'Convert to MP4';
+    return;
+  }
+
+  if (!sawData || out.length === 0) {
+    convStatus('Could not convert — the stream likely uses a codec other than H.264/AAC. Your .ts file is still saved.', true);
+    btn.disabled = false;
+    btn.textContent = 'Convert to MP4';
+    return;
+  }
+
+  const blob = new Blob(out, { type: 'video/mp4' });
+  const fname = baseName + '.mp4';
+  const url = URL.createObjectURL(blob);
+  objectUrls.push(url);
+  triggerDownload(url, fname);
+
+  const link = $('mp4Link');
+  link.href = url;
+  link.download = fname;
+  link.classList.remove('hidden');
+
+  const mb = (blob.size / 1048576).toFixed(1);
+  convStatus(`MP4 saved (${mb} MB) → ${fname}`);
+  btn.textContent = 'MP4 saved ✓';
+  logLine(`Converted to ${fname} (${mb} MB).`);
+}
+
 $('cancelBtn').addEventListener('click', () => {
   cancelled = true;
   $('cancelBtn').textContent = 'Stopping…';
   logLine('Stopping — will save the segments collected so far.');
 });
 
+$('convertBtn').addEventListener('click', convertToMp4);
+
 window.addEventListener('beforeunload', () => {
-  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrls.forEach((u) => URL.revokeObjectURL(u));
 });
 
 run();
