@@ -31,6 +31,9 @@ every segment of a video and merges them back into a single playable file.
 
    Downloading runs in a real tab (not the popup) so it keeps going even if you
    click away, and a **Stop & save** button lets you keep a partial video.
+   Tick **Hyper mode** in the popup to fetch many segments in parallel (24 at a
+   time instead of 6) for a large speedup on CDNs that allow it; the preference
+   is remembered.
 5. **Convert to MP4 (optional)** — once the `.ts` is saved, press **Convert to
    MP4**. The bundled [mux.js](https://github.com/videojs/mux.js) losslessly
    remuxes the MPEG-TS into an `.mp4` (container change only — **no

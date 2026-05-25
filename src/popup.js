@@ -85,6 +85,7 @@ $('downloadBtn').addEventListener('click', async () => {
       template: s.url,
       label: labelFor(s.url),
       max: s.max,
+      hyper: $('hyperMode').checked,
       createdAt: Date.now(),
     },
   });
@@ -108,6 +109,17 @@ async function init() {
 
   streams.sort((a, b) => b.count - a.count);
   renderStreams();
+
+  // Restore the hyper-mode preference and keep it in sync.
+  try {
+    const pref = await api.storage.local.get('avd:hyper');
+    $('hyperMode').checked = !!(pref && pref['avd:hyper']);
+  } catch (e) { /* ignore */ }
+  $('hyperMode').addEventListener('change', (e) => {
+    api.storage.local.set({ 'avd:hyper': e.target.checked }).catch(() => {});
+  });
+  $('hyperRow').classList.remove('hidden');
+
   await runRandomTest();
   $('downloadBtn').classList.remove('hidden');
 }

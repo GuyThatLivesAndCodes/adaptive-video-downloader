@@ -4,8 +4,10 @@ const SEG_RE = /seg-(\d+)/;
 const $ = (id) => document.getElementById(id);
 
 const MAX_SEG = 3000; // hard ceiling per the spec
-const CONCURRENCY = 6; // parallel fetches (ordering + end-detection preserved)
+const NORMAL_CONCURRENCY = 6;
+const HYPER_CONCURRENCY = 24; // "hyper mode": download many segments at once
 const RETRIES = 2; // extra attempts after the first → 3 tries total
+let concurrency = NORMAL_CONCURRENCY; // chosen per job
 
 const jobId = new URLSearchParams(location.search).get('job');
 
@@ -161,15 +163,19 @@ async function run() {
   template = job.template;
   label = job.label || 'video';
   knownMax = job.max || 0;
+  concurrency = job.hyper ? HYPER_CONCURRENCY : NORMAL_CONCURRENCY;
 
-  $('title').textContent = 'Downloading video…';
+  $('title').textContent = job.hyper ? 'Downloading video (hyper mode)…' : 'Downloading video…';
   $('label').textContent = label;
   logLine('Source template: ' + template.replace(SEG_RE, 'seg-#'));
   logLine(`Fetching seg-1 … seg-${MAX_SEG} (stops at the first segment that fails ${RETRIES + 1} times).`);
+  logLine(job.hyper
+    ? `Hyper mode: up to ${HYPER_CONCURRENCY} segments downloading at once.`
+    : `Up to ${NORMAL_CONCURRENCY} segments downloading at once.`);
 
   const startTime = Date.now();
   const workers = [];
-  for (let i = 0; i < CONCURRENCY; i++) workers.push(worker());
+  for (let i = 0; i < concurrency; i++) workers.push(worker());
   await Promise.all(workers);
   finalize(startTime);
 }
