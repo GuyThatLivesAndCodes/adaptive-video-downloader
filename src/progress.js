@@ -189,6 +189,112 @@ function convStatus(text, isError) {
   el.style.color = isError ? 'var(--danger)' : 'var(--muted)';
 }
 
+// --- minimal fMP4 box reader, used only to report the output duration ---
+function avdU32(b, o) {
+  return b[o] * 16777216 + b[o + 1] * 65536 + b[o + 2] * 256 + b[o + 3];
+}
+function avdReadBoxes(buf, start, end, cb) {
+  let o = start;
+  while (o + 8 <= end) {
+    let size = avdU32(buf, o);
+    let header = 8;
+    const type = String.fromCharCode(buf[o + 4], buf[o + 5], buf[o + 6], buf[o + 7]);
+    if (size === 1) {
+      size = avdU32(buf, o + 8) * 4294967296 + avdU32(buf, o + 12);
+      header = 16;
+    } else if (size === 0) {
+      size = end - o;
+    }
+    if (size < header || o + size > end) break;
+    cb(type, o + header, o + size);
+    o += size;
+  }
+}
+function avdVideoTrack(init) {
+  let chosen = null;
+  let first = null;
+  avdReadBoxes(init, 0, init.length, (t, ps, pe) => {
+    if (t !== 'moov') return;
+    avdReadBoxes(init, ps, pe, (t1, cs, ce) => {
+      if (t1 !== 'trak') return;
+      const tr = { id: 0, timescale: 0, vid: false };
+      avdReadBoxes(init, cs, ce, (t2, cs2, ce2) => {
+        if (t2 === 'tkhd') tr.id = init[cs2] === 1 ? avdU32(init, cs2 + 20) : avdU32(init, cs2 + 12);
+        else if (t2 === 'mdia')
+          avdReadBoxes(init, cs2, ce2, (t3, cs3) => {
+            if (t3 === 'mdhd') tr.timescale = init[cs3] === 1 ? avdU32(init, cs3 + 20) : avdU32(init, cs3 + 12);
+            else if (t3 === 'hdlr') {
+              const h = String.fromCharCode(init[cs3 + 8], init[cs3 + 9], init[cs3 + 10], init[cs3 + 11]);
+              if (h === 'vide') tr.vid = true;
+            }
+          });
+      });
+      if (!first) first = tr;
+      if (tr.vid && !chosen) chosen = tr;
+    });
+  });
+  return chosen || first;
+}
+function avdSumTrun(frag, trackId) {
+  let sum = 0;
+  avdReadBoxes(frag, 0, frag.length, (t, ps, pe) => {
+    if (t !== 'moof') return;
+    avdReadBoxes(frag, ps, pe, (t1, cs, ce) => {
+      if (t1 !== 'traf') return;
+      let id = 0;
+      let defDur = 0;
+      let hasDef = false;
+      let fragSum = 0;
+      avdReadBoxes(frag, cs, ce, (t2, cs2) => {
+        if (t2 === 'tfhd') {
+          const f = avdU32(frag, cs2) & 0xffffff;
+          id = avdU32(frag, cs2 + 4);
+          let off = cs2 + 8;
+          if (f & 0x01) off += 8;
+          if (f & 0x02) off += 4;
+          if (f & 0x08) { defDur = avdU32(frag, off); hasDef = true; }
+        } else if (t2 === 'trun') {
+          const f = avdU32(frag, cs2) & 0xffffff;
+          const c = avdU32(frag, cs2 + 4);
+          let off = cs2 + 8;
+          if (f & 0x01) off += 4;
+          if (f & 0x04) off += 4;
+          for (let i = 0; i < c; i++) {
+            if (f & 0x100) { fragSum += avdU32(frag, off); off += 4; }
+            else if (hasDef) { fragSum += defDur; }
+            if (f & 0x200) off += 4;
+            if (f & 0x400) off += 4;
+            if (f & 0x800) off += 4;
+          }
+        }
+      });
+      if (id === trackId) sum += fragSum;
+    });
+  });
+  return sum;
+}
+// out = [initSegment, fragment1, fragment2, …]; sum each fragment's media duration.
+function mp4DurationSeconds(chunks) {
+  try {
+    if (!chunks || chunks.length < 2) return null;
+    const track = avdVideoTrack(chunks[0]);
+    if (!track || !track.timescale) return null;
+    let total = 0;
+    for (let i = 1; i < chunks.length; i++) total += avdSumTrun(chunks[i], track.id);
+    return total ? total / track.timescale : null;
+  } catch (e) {
+    return null;
+  }
+}
+function formatTime(totalSecs) {
+  const s = Math.round(totalSecs);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const p = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`;
+}
+
 // Remux the merged MPEG-TS into a (fragmented) MP4 with mux.js — no re-encoding.
 async function convertToMp4() {
   if (!finalParts || finalParts.length === 0) return;
@@ -215,16 +321,19 @@ async function convertToMp4() {
   });
 
   try {
+    // Flush after EACH segment. mux.js must process one segment per flush cycle;
+    // pushing them all and flushing once makes it compute a frame duration across
+    // a segment boundary where the decode timestamp jumps backwards, which gets
+    // encoded as an unsigned 32-bit value (~2^32 ticks ≈ 13h) and inflates the
+    // total duration. Per-segment flushing keeps each fragment's timing correct.
     for (let i = 0; i < finalParts.length; i++) {
       transmuxer.push(finalParts[i]);
-      if (i % 25 === 0) {
+      transmuxer.flush();
+      if (i % 20 === 0) {
         convStatus(`Remuxing to MP4… ${i + 1}/${finalParts.length} segments`);
-        await new Promise((r) => setTimeout(r)); // yield so the UI stays responsive
+        await new Promise((r) => setTimeout(r)); // keep the UI responsive
       }
     }
-    convStatus('Finalizing MP4…');
-    await new Promise((r) => setTimeout(r));
-    transmuxer.flush(); // emits the data + done events synchronously
   } catch (e) {
     convStatus('Conversion failed: ' + (e && e.message ? e.message : e), true);
     btn.disabled = false;
@@ -251,9 +360,11 @@ async function convertToMp4() {
   link.classList.remove('hidden');
 
   const mb = (blob.size / 1048576).toFixed(1);
-  convStatus(`MP4 saved (${mb} MB) → ${fname}`);
+  const durSecs = mp4DurationSeconds(out);
+  const durStr = durSecs ? ` · ${formatTime(durSecs)}` : '';
+  convStatus(`MP4 saved (${mb} MB${durStr}) → ${fname}`);
   btn.textContent = 'MP4 saved ✓';
-  logLine(`Converted to ${fname} (${mb} MB).`);
+  logLine(`Converted to ${fname} (${mb} MB${durStr}).`);
 }
 
 $('cancelBtn').addEventListener('click', () => {
