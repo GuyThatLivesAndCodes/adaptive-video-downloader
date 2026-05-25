@@ -4,10 +4,9 @@ const SEG_RE = /seg-(\d+)/;
 const $ = (id) => document.getElementById(id);
 
 const MAX_SEG = 3000; // hard ceiling per the spec
-const NORMAL_CONCURRENCY = 6;
-const HYPER_CONCURRENCY = 24; // "hyper mode": download many segments at once
+const DEFAULT_CONCURRENCY = 6;
 const RETRIES = 2; // extra attempts after the first → 3 tries total
-let concurrency = NORMAL_CONCURRENCY; // chosen per job
+let concurrency = DEFAULT_CONCURRENCY; // chosen per job (Normal/Fast/Hyper)
 
 const jobId = new URLSearchParams(location.search).get('job');
 
@@ -154,30 +153,108 @@ async function run() {
   const key = 'avd:job:' + jobId;
   const got = await api.storage.session.get(key);
   const job = got && got[key];
-  if (!job || !job.template) {
+  if (!job || (!job.template && !job.url)) {
     $('title').textContent = 'Download job not found';
     $('cancelBtn').classList.add('hidden');
+    return;
+  }
+
+  if (job.kind === 'file') {
+    await runFile(job);
     return;
   }
 
   template = job.template;
   label = job.label || 'video';
   knownMax = job.max || 0;
-  concurrency = job.hyper ? HYPER_CONCURRENCY : NORMAL_CONCURRENCY;
+  concurrency = Math.max(1, Math.min(64, job.concurrency || DEFAULT_CONCURRENCY));
 
-  $('title').textContent = job.hyper ? 'Downloading video (hyper mode)…' : 'Downloading video…';
+  $('title').textContent = 'Downloading video…';
   $('label').textContent = label;
   logLine('Source template: ' + template.replace(SEG_RE, 'seg-#'));
   logLine(`Fetching seg-1 … seg-${MAX_SEG} (stops at the first segment that fails ${RETRIES + 1} times).`);
-  logLine(job.hyper
-    ? `Hyper mode: up to ${HYPER_CONCURRENCY} segments downloading at once.`
-    : `Up to ${NORMAL_CONCURRENCY} segments downloading at once.`);
+  logLine(`Up to ${concurrency} segments downloading at once${job.speed ? ' (' + job.speed + ' mode)' : ''}.`);
 
   const startTime = Date.now();
   const workers = [];
   for (let i = 0; i < concurrency; i++) workers.push(worker());
   await Promise.all(workers);
   finalize(startTime);
+}
+
+// Direct progressive file (TikTok, Instagram, …): fetch one URL and save it.
+function fileExtFor(url, mime) {
+  const path = url.split('?')[0].split('#')[0];
+  const m = /\.(mp4|m4v|webm|mov|ogv|ts)$/i.exec(path);
+  if (m) return '.' + m[1].toLowerCase();
+  const t = (mime || '').split(';')[0].trim().toLowerCase();
+  if (t === 'video/webm') return '.webm';
+  if (t === 'video/quicktime') return '.mov';
+  if (t === 'video/ogg') return '.ogv';
+  return '.mp4';
+}
+
+async function runFile(job) {
+  baseName = sanitize(job.label || 'video');
+  $('title').textContent = 'Downloading file…';
+  $('label').textContent = job.url.split('?')[0];
+  logLine('Direct download: ' + job.url.split('?')[0]);
+  const startTime = Date.now();
+
+  try {
+    const res = await fetch(job.url, { cache: 'no-store' });
+    if (!res.ok) throw new Error('server returned HTTP ' + res.status);
+
+    const total = parseInt(res.headers.get('content-length') || '0', 10);
+    const chunks = [];
+    let received = 0;
+    const reader = res.body && res.body.getReader ? res.body.getReader() : null;
+    if (reader) {
+      for (;;) {
+        if (cancelled) break;
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (total) $('barFill').style.width = Math.min(99, Math.round((received / total) * 100)) + '%';
+        $('stat').textContent =
+          `${(received / 1048576).toFixed(1)} MB` + (total ? ` / ${(total / 1048576).toFixed(1)} MB` : '');
+      }
+    } else {
+      const buf = new Uint8Array(await res.arrayBuffer());
+      chunks.push(buf);
+      received = buf.length;
+    }
+
+    if (received === 0) throw new Error('no data received');
+
+    const mime = res.headers.get('content-type') || job.mime || '';
+    const fname = baseName + fileExtFor(job.url, mime);
+    const blob = new Blob(chunks, { type: mime || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    objectUrls.push(url);
+    triggerDownload(url, fname);
+
+    const link = $('saveLink');
+    link.href = url;
+    link.download = fname;
+    link.textContent = 'Save file';
+    link.classList.remove('hidden');
+
+    $('cancelBtn').classList.add('hidden');
+    $('barFill').style.width = '100%';
+    $('barFill').classList.add('done');
+    const mb = (blob.size / 1048576).toFixed(1);
+    const secs = ((Date.now() - startTime) / 1000).toFixed(0);
+    $('title').textContent = cancelled ? 'Stopped — partial file saved' : 'Done! File saved to Downloads';
+    $('stat').textContent = `${mb} MB · ${secs}s → ${fname}`;
+    api.storage.session.remove('avd:job:' + jobId).catch(() => {});
+  } catch (e) {
+    $('title').textContent = 'Download failed';
+    $('cancelBtn').classList.add('hidden');
+    $('stat').textContent =
+      (e && e.message ? e.message : String(e)) + ' — the link may require the original page or have expired.';
+  }
 }
 
 function triggerDownload(url, filename) {

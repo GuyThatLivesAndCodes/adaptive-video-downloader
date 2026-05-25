@@ -16,23 +16,31 @@
   <main>
     <div id="status" class="status">Scanning network activity&hellip;</div>
 
-    <div id="streamWrap" class="hidden">
-      <label for="streamSel">Detected video</label>
+    <!-- HLS segment streams (seg-N) -->
+    <section id="streamWrap" class="hidden">
+      <label for="streamSel">Detected video (HLS segments)</label>
       <select id="streamSel"></select>
       <div id="meta" class="meta"></div>
-    </div>
 
-    <div id="testResult" class="test hidden"></div>
+      <div id="testResult" class="test hidden"></div>
 
-    <label id="hyperRow" class="toggle hidden">
-      <input type="checkbox" id="hyperMode" />
-      <span class="toggle-text">
-        Hyper mode
-        <small>Download many segments at once — much faster</small>
-      </span>
-    </label>
+      <div class="speed">
+        <span class="speed-label">Download speed</span>
+        <div class="seg" id="speedSeg" role="group" aria-label="Download speed">
+          <button type="button" data-speed="normal" data-conc="6">Normal</button>
+          <button type="button" data-speed="fast" data-conc="12">Fast</button>
+          <button type="button" data-speed="hyper" data-conc="24">Hyper</button>
+        </div>
+      </div>
 
-    <button id="downloadBtn" class="primary hidden">Download video</button>
+      <button id="downloadBtn" class="primary">Download video</button>
+    </section>
+
+    <!-- Direct progressive media files (TikTok, Instagram, …) -->
+    <section id="mediaWrap" class="hidden">
+      <label>Direct video files</label>
+      <div id="mediaList"></div>
+    </section>
 
     <p id="hint" class="hint hidden">
       Open or play a video on this page, wait a moment, then reopen this popup.

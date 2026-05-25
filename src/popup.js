@@ -4,6 +4,7 @@ const SEG_RE = /seg-(\d+)/;
 const $ = (id) => document.getElementById(id);
 
 let streams = [];
+let media = [];
 
 function buildSegUrl(template, n) {
   return template.replace(SEG_RE, 'seg-' + n);
@@ -23,6 +24,38 @@ function labelFor(url) {
   }
 }
 
+function mediaLabel(url) {
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean);
+    let name = decodeURIComponent(parts[parts.length - 1] || '');
+    if (!/\.[a-z0-9]{2,4}$/i.test(name)) name = u.hostname; // no real filename → host
+    if (name.length > 34) name = name.slice(0, 32) + '…';
+    return name || 'video';
+  } catch (e) {
+    return 'video';
+  }
+}
+
+function formatSize(bytes) {
+  if (!bytes) return '';
+  if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+  return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+}
+
+function newJobId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+async function startJob(job) {
+  const jobId = newJobId();
+  await api.storage.session.set({ ['avd:job:' + jobId]: { ...job, createdAt: Date.now() } });
+  await api.tabs.create({ url: api.runtime.getURL('progress.html?job=' + jobId) });
+  window.close();
+}
+
+/* ---------- HLS segment streams ---------- */
+
 function current() {
   return streams[parseInt($('streamSel').value || '0', 10)] || streams[0];
 }
@@ -32,8 +65,19 @@ function updateMeta() {
   $('meta').textContent = `${s.count} segment request(s) seen · highest seg-${s.max}`;
 }
 
+function activeConcurrency() {
+  const btn = $('speedSeg').querySelector('button.active') || $('speedSeg').querySelector('button');
+  return { conc: parseInt(btn.dataset.conc, 10) || 6, speed: btn.dataset.speed || 'normal' };
+}
+
+function setSpeed(speed) {
+  $('speedSeg').querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('active', b.dataset.speed === speed);
+  });
+  api.storage.local.set({ 'avd:speed': speed }).catch(() => {});
+}
+
 function renderStreams() {
-  $('status').classList.add('hidden');
   $('streamWrap').classList.remove('hidden');
   const sel = $('streamSel');
   sel.innerHTML = '';
@@ -45,11 +89,6 @@ function renderStreams() {
   });
   sel.addEventListener('change', () => { updateMeta(); runRandomTest(); });
   updateMeta();
-}
-
-function showNone() {
-  $('status').textContent = 'No video segments detected on this tab yet.';
-  $('hint').classList.remove('hidden');
 }
 
 async function runRandomTest() {
@@ -77,21 +116,59 @@ async function runRandomTest() {
   }
 }
 
-$('downloadBtn').addEventListener('click', async () => {
+$('downloadBtn').addEventListener('click', () => {
   const s = current();
-  const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  await api.storage.session.set({
-    ['avd:job:' + jobId]: {
-      template: s.url,
-      label: labelFor(s.url),
-      max: s.max,
-      hyper: $('hyperMode').checked,
-      createdAt: Date.now(),
-    },
-  });
-  await api.tabs.create({ url: api.runtime.getURL('progress.html?job=' + jobId) });
-  window.close();
+  const { conc, speed } = activeConcurrency();
+  startJob({ kind: 'hls', template: s.url, label: labelFor(s.url), max: s.max, concurrency: conc, speed });
 });
+
+$('speedSeg').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-speed]');
+  if (btn) setSpeed(btn.dataset.speed);
+});
+
+/* ---------- Direct media files ---------- */
+
+function renderMedia() {
+  if (media.length === 0) return;
+  $('mediaWrap').classList.remove('hidden');
+  const list = $('mediaList');
+  list.innerHTML = '';
+  media.forEach((m) => {
+    const item = document.createElement('div');
+    item.className = 'media-item';
+
+    const info = document.createElement('div');
+    info.className = 'media-info';
+    const name = document.createElement('span');
+    name.className = 'media-name';
+    name.textContent = mediaLabel(m.url);
+    const sub = document.createElement('span');
+    sub.className = 'media-sub';
+    const type = (m.mime || '').split('/')[1] || 'video';
+    sub.textContent = [formatSize(m.size), type].filter(Boolean).join(' · ');
+    info.appendChild(name);
+    info.appendChild(sub);
+
+    const btn = document.createElement('button');
+    btn.className = 'media-dl';
+    btn.textContent = 'Download';
+    btn.addEventListener('click', () => {
+      startJob({ kind: 'file', url: m.url, label: mediaLabel(m.url), mime: m.mime });
+    });
+
+    item.appendChild(info);
+    item.appendChild(btn);
+    list.appendChild(item);
+  });
+}
+
+/* ---------- init ---------- */
+
+function showNone() {
+  $('status').textContent = 'No video detected on this tab yet.';
+  $('hint').classList.remove('hidden');
+}
 
 async function init() {
   const tabs = await api.tabs.query({ active: true, currentWindow: true });
@@ -105,23 +182,25 @@ async function init() {
     resp = null;
   }
   streams = (resp && resp.streams) || [];
-  if (streams.length === 0) { showNone(); return; }
+  media = (resp && resp.media) || [];
 
-  streams.sort((a, b) => b.count - a.count);
-  renderStreams();
+  if (streams.length === 0 && media.length === 0) { showNone(); return; }
+  $('status').classList.add('hidden');
 
-  // Restore the hyper-mode preference and keep it in sync.
+  // restore the saved speed preference
   try {
-    const pref = await api.storage.local.get('avd:hyper');
-    $('hyperMode').checked = !!(pref && pref['avd:hyper']);
-  } catch (e) { /* ignore */ }
-  $('hyperMode').addEventListener('change', (e) => {
-    api.storage.local.set({ 'avd:hyper': e.target.checked }).catch(() => {});
-  });
-  $('hyperRow').classList.remove('hidden');
+    const pref = await api.storage.local.get('avd:speed');
+    setSpeed((pref && pref['avd:speed']) || 'normal');
+  } catch (e) {
+    setSpeed('normal');
+  }
 
-  await runRandomTest();
-  $('downloadBtn').classList.remove('hidden');
+  if (streams.length > 0) {
+    streams.sort((a, b) => b.count - a.count);
+    renderStreams();
+    await runRandomTest();
+  }
+  renderMedia();
 }
 
 init();

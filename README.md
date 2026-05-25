@@ -4,8 +4,13 @@ The most adaptive, easy-to-use video downloader that works on almost any site.
 With a slick UI and advanced innersystems, this plugin beats competitors at
 style and speed.
 
-It detects **adaptive (HLS) `.ts` video segments** as you browse, then downloads
-every segment of a video and merges them back into a single playable file.
+It detects video as you browse using two methods:
+
+- **Adaptive HLS `.ts` segments** (`seg-N`) — downloads every segment and merges
+  them into a single playable file.
+- **Direct progressive files** (`.mp4`/`.webm`/`.mov`, even without a file
+  extension) — detected by their `Content-Type`; covers TikTok and many
+  Instagram videos.
 
 ---
 
@@ -31,9 +36,13 @@ every segment of a video and merges them back into a single playable file.
 
    Downloading runs in a real tab (not the popup) so it keeps going even if you
    click away, and a **Stop & save** button lets you keep a partial video.
-   Tick **Hyper mode** in the popup to fetch many segments in parallel (24 at a
-   time instead of 6) for a large speedup on CDNs that allow it; the preference
-   is remembered.
+   The **Download speed** selector (Normal / Fast / Hyper = 6 / 12 / 24 segments
+   in parallel) trades politeness for speed on CDNs that allow it; the choice is
+   remembered.
+
+   For a **direct video file**, the popup lists it under *Direct video files* —
+   click **Download** and it's fetched in one request (with a progress bar) and
+   saved.
 5. **Convert to MP4 (optional)** — once the `.ts` is saved, press **Convert to
    MP4**. The bundled [mux.js](https://github.com/videojs/mux.js) losslessly
    remuxes the MPEG-TS into an `.mp4` (container change only — **no
@@ -102,8 +111,8 @@ artifacts (`adaptive-video-downloader-chrome` and
 ```
 src/
   background.js     network logging + per-tab segment store (SW / event page)
-  popup.html/.css/.js   scan, random test, download button
-  progress.html/.css/.js  fetch seg-1..3000, retry, merge, save, convert
+  popup.html/.css/.js   scan streams + direct files, speed selector, test
+  progress.html/.css/.js  download (segments or direct file), merge, save, convert
   vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0)
   icons/            generated PNGs
 manifest.chrome.json   Manifest V3 (Chrome)
@@ -113,6 +122,18 @@ build.sh               packages both browsers
 ```
 
 ---
+
+## Site support
+
+- **Works well:** generic HLS (`seg-N`) sites, TikTok, and many Instagram videos
+  (progressive MP4).
+- **Not supported: YouTube.** Its media uses DASH with *separate* audio and video
+  streams, plus a deliberately throttled `n` parameter that requires running
+  YouTube's obfuscated player code to defeat — a moving target that's out of
+  scope for a lightweight extension (and against YouTube's ToS). `googlevideo.com`
+  requests are intentionally ignored so they aren't offered as broken downloads.
+- Some sites that require the page's cookies/`Referer` on the media URL may
+  reject the extension's direct fetch.
 
 ## Notes & limitations
 
