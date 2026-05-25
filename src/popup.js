@@ -6,6 +6,55 @@ const $ = (id) => document.getElementById(id);
 let streams = [];
 let media = [];
 
+// Sites we deliberately don't support: YouTube (throttled DASH + ToS) and
+// DRM-protected services (content is encrypted — can't and won't be bypassed).
+const UNSUPPORTED_SITES = [
+  {
+    hosts: ['youtube.com', 'youtu.be'],
+    name: 'YouTube',
+    reason:
+      'YouTube serves throttled DASH streams (separate audio and video) that need its obfuscated player code to download, and doing so is against its Terms of Service.',
+  },
+  { hosts: ['netflix.com'], name: 'Netflix', drm: true },
+  { hosts: ['disneyplus.com'], name: 'Disney+', drm: true },
+  { hosts: ['hulu.com'], name: 'Hulu', drm: true },
+  { hosts: ['max.com', 'hbomax.com'], name: 'Max', drm: true },
+  { hosts: ['primevideo.com'], name: 'Prime Video', drm: true },
+  { hosts: ['tv.apple.com'], name: 'Apple TV+', drm: true },
+  { hosts: ['open.spotify.com', 'spotify.com'], name: 'Spotify', drm: true },
+];
+
+function hostnameOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch (e) {
+    return '';
+  }
+}
+
+function matchUnsupported(host) {
+  if (!host) return null;
+  return (
+    UNSUPPORTED_SITES.find((s) => s.hosts.some((h) => host === h || host.endsWith('.' + h))) || null
+  );
+}
+
+function reasonFor(site) {
+  if (site.reason) return site.reason;
+  if (site.drm) {
+    return `Video on ${site.name} is protected by DRM (encrypted), so it can't be downloaded — and this extension won't bypass DRM.`;
+  }
+  return `${site.name} isn't supported.`;
+}
+
+function showLockdown(site) {
+  document.body.classList.add('locked');
+  $('status').classList.add('hidden');
+  $('lockSite').textContent = site.name;
+  $('lockReason').textContent = reasonFor(site);
+  $('lockdown').classList.remove('hidden');
+}
+
 function buildSegUrl(template, n) {
   return template.replace(SEG_RE, 'seg-' + n);
 }
@@ -174,6 +223,10 @@ async function init() {
   const tabs = await api.tabs.query({ active: true, currentWindow: true });
   const tab = tabs && tabs[0];
   if (!tab) { showNone(); return; }
+
+  // Sites we can't support get a clear red lockdown view instead of an empty scan.
+  const blocked = matchUnsupported(hostnameOf(tab.url || ''));
+  if (blocked) { showLockdown(blocked); return; }
 
   let resp = null;
   try {

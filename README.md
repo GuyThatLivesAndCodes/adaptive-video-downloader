@@ -127,11 +127,18 @@ build.sh               packages both browsers
 
 - **Works well:** generic HLS (`seg-N`) sites, TikTok, and many Instagram videos
   (progressive MP4).
-- **Not supported: YouTube.** Its media uses DASH with *separate* audio and video
-  streams, plus a deliberately throttled `n` parameter that requires running
-  YouTube's obfuscated player code to defeat — a moving target that's out of
-  scope for a lightweight extension (and against YouTube's ToS). `googlevideo.com`
-  requests are intentionally ignored so they aren't offered as broken downloads.
+- **Deliberately blocked (red lockdown view):** when the active tab is on a site
+  the extension can't help with, the popup turns red and explains why instead of
+  showing an empty scan. This covers:
+  - **YouTube** — throttled DASH with separate audio/video that needs its
+    obfuscated player code to download, and against its Terms of Service.
+    (`googlevideo.com` requests are also ignored so they're never offered as
+    broken downloads.)
+  - **DRM services** (Netflix, Disney+, Hulu, Max, Prime Video, Apple TV+,
+    Spotify) — the content is encrypted; it can't be downloaded and the
+    extension won't attempt to bypass DRM.
+
+  The blocked list lives in `UNSUPPORTED_SITES` in `src/popup.js`.
 - Some sites that require the page's cookies/`Referer` on the media URL may
   reject the extension's direct fetch.
 
