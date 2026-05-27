@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.42l2.3 2.3V4a1 1 0 0 1 1-1ZM5 18a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z"/></svg>
+    </div>
+    <h1>Adaptive Video Downloader</h1>
+  </header>
+
+  <main>
+    <div id="status" class="status">Scanning network activity&hellip;</div>
+
+    <!-- Shown on sites we deliberately don't support (YouTube, DRM services) -->
+    <section id="lockdown" class="lockdown hidden">
+      <div class="lock-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5Zm3 8H9V7a3 3 0 0 1 6 0v3Z"/></svg>
+      </div>
+      <h2>Downloading not available</h2>
+      <p class="lock-site">Can't provide downloads from <span id="lockSite">this site</span>.</p>
+      <p id="lockReason" class="lock-reason"></p>
+    </section>
+
+    <!-- HLS segment streams (seg-N) -->
+    <section id="streamWrap" class="hidden">
+      <label for="streamSel">Detected video (HLS segments)</label>
+      <select id="streamSel"></select>
+      <div id="meta" class="meta"></div>
+
+      <div id="testResult" class="test hidden"></div>
+
+      <div class="speed">
+        <span class="speed-label">Download speed</span>
+        <div class="seg" id="speedSeg" role="group" aria-label="Download speed">
+          <button type="button" data-speed="normal" data-conc="6">Normal</button>
+          <button type="button" data-speed="fast" data-conc="12">Fast</button>
+          <button type="button" data-speed="hyper" data-conc="24">Hyper</button>
+        </div>
+      </div>
+
+      <button id="downloadBtn" class="primary">Download video</button>
+    </section>
+
+    <!-- Direct progressive media files (TikTok, Instagram, …) -->
+    <section id="mediaWrap" class="hidden">
+      <label>Direct video files</label>
+      <div id="mediaList"></div>
+    </section>
+
+    <p id="hint" class="hint hidden">
+      Open or play a video on this page, wait a moment, then reopen this popup.
+    </p>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

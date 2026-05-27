@@ -1,0 +1,29 @@
+{
+  "manifest_version": 2,
+  "name": "Adaptive Video Downloader",
+  "version": "1.0.0",
+  "description": "Detects adaptive (HLS) video segments on any page, then downloads and merges them into a single video file.",
+  "permissions": ["webRequest", "storage", "tabs", "<all_urls>"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "Adaptive Video Downloader",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "icons": {
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "adaptive-video-downloader@guythatlivesandcodes",
+      "strict_min_version": "115.0"
+    }
+  }
+}

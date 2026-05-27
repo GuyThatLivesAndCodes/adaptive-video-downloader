@@ -1,0 +1,16 @@
+{
+  "name": "adaptive-video-downloader",
+  "version": "1.0.0",
+  "description": "Cross-browser extension that detects adaptive (HLS) video segments and downloads + merges them into one file.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "icons": "node tools/make-icons.mjs",
+    "vendor": "cp node_modules/mux.js/dist/mux-mp4.min.js src/vendor/mux-mp4.min.js",
+    "build": "bash build.sh"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "mux.js": "^6.3.0"
+  }
+}
