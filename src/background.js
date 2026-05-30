@@ -5,10 +5,14 @@
 //   1. Numbered segment streams (HLS) — any URL with an incrementing index
 //      (seg-12, segment_12, chunk12, frag-12, 00012.ts, …). URLs that differ
 //      only by that index converge into one downloadable template.
-//   2. Direct video files (mp4/webm/mov/ts/…) detected by file extension or
+//   2. Encrypted HLS/DASH streams — automatically detected via manifest headers
+//   3. Direct video files (mp4/webm/mov/ts/…) detected by file extension or
 //      Content-Type — one progressive file, downloaded whole.
 
 const api = globalThis.browser ?? globalThis.chrome;
+
+// Cache for detected encrypted/DASH streams
+const encryptedStreams = new Map();
 
 // Extensions we treat as downloadable video.
 const VIDEO_EXT_RE = /\.(ts|mp4|m4v|m4s|webm|mov|ogv)(\?|#|$)/i;
@@ -261,11 +265,26 @@ function resetTab(tabId) {
   if (changed) scheduleSave();
 }
 
+function isManifestUrl(url) {
+  const lower = url.toLowerCase();
+  return lower.includes('.m3u8') || lower.includes('.mpd') || lower.includes('manifest');
+}
+
+function recordManifest(tabId, url) {
+  if (tabId == null || tabId < 0) return;
+  const tabKey = String(tabId);
+  const key = `manifest_${url.split('?')[0]}`;
+  if (!encryptedStreams.has(key)) {
+    encryptedStreams.set(key, { url, tabId, ts: Date.now() });
+  }
+}
+
 api.webRequest.onBeforeRequest.addListener(
   (details) => {
     ready.then(() => {
       if (isSelf(details)) return;
       if (details.type === 'main_frame') { resetTab(details.tabId); return; }
+      if (isManifestUrl(details.url)) { recordManifest(details.tabId, details.url); return; }
       const seg = findSegIndex(details.url);
       if (seg) recordSeg(details.tabId, details.url, seg);
       else if (isVideoFileUrl(details.url)) recordMedia(details.tabId, details.url, '', 0);
