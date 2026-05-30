@@ -238,4 +238,98 @@ body.locked .logo {
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
 }
 
+/* ---------- in-popup download progress ---------- */
+.progress { gap: 12px; }
+
+.back {
+  align-self: flex-start;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.back:hover { color: var(--text); }
+
+.dl-title { font-size: 15px; font-weight: 680; }
+.dl-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.barFill {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #60a5fa);
+  transition: width 0.25s ease;
+}
+.barFill.done { background: linear-gradient(90deg, var(--ok), #6ee7b7); }
+
+.stat {
+  font-size: 12.5px;
+  color: var(--muted);
+  min-height: 16px;
+}
+
+.dl-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+button.danger, a.save, button.convert {
+  padding: 9px 13px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 620;
+  cursor: pointer;
+  border: 1px solid transparent;
+  text-decoration: none;
+}
+button.danger {
+  background: transparent;
+  border-color: rgba(248, 113, 113, 0.5);
+  color: var(--danger);
+}
+button.danger:hover { background: rgba(248, 113, 113, 0.12); }
+a.save {
+  background: linear-gradient(160deg, var(--ok), #10b981);
+  color: #06231a;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+}
+button.convert {
+  background: linear-gradient(160deg, var(--accent), var(--accent-2));
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+}
+button.convert:hover { box-shadow: 0 6px 16px rgba(37, 99, 235, 0.45); }
+button.convert:disabled { opacity: 0.6; cursor: default; box-shadow: none; }
+
+.log {
+  max-height: 130px;
+  overflow-y: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  background: #0c0e13;
+  border: 1px solid var(--panel-2);
+  border-radius: 9px;
+  padding: 10px 12px;
+  line-height: 1.5;
+}
+.log div { white-space: pre-wrap; word-break: break-all; }
+
 .hidden { display: none !important; }

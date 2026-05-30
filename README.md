@@ -27,18 +27,19 @@ It detects video as you browse using two methods:
    segment number on the captured URL (e.g. `seg-21` → `seg-1847`). Because the
    token is not tied to a single segment, a successful response confirms the
    stream can be fetched on demand.
-4. **Download** — press **Download video**. A dedicated progress tab opens and
-   fetches `seg-1 … seg-3000`:
+4. **Download** — press **Download video**. The popup switches to an in-popup
+   progress view (no separate tab opens) and fetches `seg-1 … seg-3000`:
    - each segment is tried up to **3 times** (1 try + 2 retries);
    - the **first segment that still fails is treated as the end of the video**;
    - all segments before it are concatenated (MPEG-TS segments merge by simple
      byte concatenation) into one `.ts` file and saved to your Downloads.
 
-   Downloading runs in a real tab (not the popup) so it keeps going even if you
-   click away, and a **Stop & save** button lets you keep a partial video.
-   The **Download speed** selector (Normal / Fast / Hyper = 6 / 12 / 24 segments
-   in parallel) trades politeness for speed on CDNs that allow it; the choice is
-   remembered.
+   Everything runs inside the popup, so **keep it open until the download
+   finishes** — clicking elsewhere closes the popup and stops the download. A
+   **Stop & save** button lets you keep a partial video, and **‹ Back** returns
+   to the scan list. The **Download speed** selector (Normal / Fast / Hyper =
+   6 / 12 / 24 segments in parallel) trades politeness for speed on CDNs that
+   allow it; the choice is remembered.
 
    For a **direct video file**, the popup lists it under *Direct video files* —
    click **Download** and it's fetched in one request (with a progress bar) and
@@ -111,9 +112,10 @@ artifacts (`adaptive-video-downloader-chrome` and
 ```
 src/
   background.js     network logging + per-tab segment store (SW / event page)
-  popup.html/.css/.js   scan streams + direct files, speed selector, test
-  progress.html/.css/.js  download (segments or direct file), merge, save, convert
-  vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0)
+  popup.html/.css/.js   scan streams + direct files, speed selector, test, and
+                        the in-popup downloader (fetch, merge, save, convert)
+  vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0), loaded
+                        on demand by the popup for MP4 conversion
   icons/            generated PNGs
 manifest.chrome.json   Manifest V3 (Chrome)
 manifest.firefox.json  Manifest V2 (Firefox)
