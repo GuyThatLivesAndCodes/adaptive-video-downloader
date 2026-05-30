@@ -9,6 +9,14 @@
     "scripts": ["engine.js", "background.js"],
     "persistent": true
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
   "browser_action": {
     "default_title": "Adaptive Video Downloader",
     "default_popup": "popup.html",
