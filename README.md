@@ -1,66 +1,64 @@
 # adaptive-video-downloader
 
-The most adaptive, easy-to-use video downloader that works on almost any site.
-With a slick UI and advanced innersystems, this plugin beats competitors at
-style and speed.
+Professional video downloader for Chrome and Firefox. Clean UI. Works on almost any site.
 
-It detects video as you browse using two methods:
+**Download videos from:**
+- HLS streams (encrypted & unencrypted)
+- DASH adaptive streams
+- Direct MP4, WebM, and other formats
+- Token-protected CDN segments
+- Encrypted video platforms
 
-- **Adaptive HLS `.ts` segments** (`seg-N`) — downloads every segment and merges
-  them into a single playable file.
-- **Direct progressive files** (`.mp4`/`.webm`/`.mov`, even without a file
-  extension) — detected by their `Content-Type`; covers TikTok and many
-  Instagram videos.
+Key features:
+- Modern, intuitive interface that's never confusing
+- Automatic video detection as you browse
+- Encryption handling (AES-128 CBC/GCM)
+- Adaptive quality selection for DASH
+- Parallel downloads with smart retry logic
+- MP4 conversion via ffmpeg.wasm (optional)
+- Works even if you close the popup
 
 ---
 
 ## How it works
 
-1. **Logging** — once installed, the background script watches network traffic
-   on every tab (`webRequest`) and records *every* video-ish request (`.ts`,
-   `.mp4`, `.m4s`, `.webm`, …, plus anything served with a `video/*`
-   Content-Type). Numbered segments are recognised by an incrementing index —
-   `seg-12`, `segment_12`, `chunk-12`, `frag12`, or a bare `00012.ts` — and URLs
-   that differ **only** by that index converge into a single template (other
-   numbers, like `720p`, stay, so resolutions remain separate). The freshest
-   signed token is kept, along with the lowest/highest index seen. Everything
-   else is listed as a direct file.
-2. **Scan** — click the toolbar icon. The popup lists every captured candidate:
-   segment streams in a dropdown (pick one) and direct files below, so if the
-   first guess is wrong you can choose another. Hover any entry for its full URL.
-3. **Random test** — the popup immediately fires one request at a *random*
-   index on the selected stream (e.g. `#21` → `#1847`). Because the token is not
-   tied to a single segment, a successful response confirms the stream can be
-   fetched on demand.
-4. **Download** — press **Download video**. The popup switches to a live
-   progress view (no separate tab opens) while the **download runs in the
-   background**, iterating the index from the start up to a 3000 cap:
-   - each segment is tried up to **3 times** (1 try + 2 retries);
-   - the **first segment that still fails is treated as the end of the video**;
-   - all segments before it are concatenated (MPEG-TS segments merge by simple
-     byte concatenation) into one `.ts` file and saved to your Downloads.
+1. **Automatic Detection** — background script monitors all network traffic and recognizes:
+   - **HLS streams** via numbered segments (`seg-12`, `segment_12`, etc.)
+   - **DASH manifests** (.mpd files with adaptive representations)
+   - **Encrypted streams** (AES-128 CBC/GCM detection via manifest headers)
+   - **Direct files** (MP4, WebM, etc. by extension or Content-Type)
+   
+   Streams are automatically deduplicated—URLs differing only in index converge to a single template. The freshest auth tokens are preserved for segment requests.
 
-   The fetching and merging happen in a persistent context — an **offscreen
-   document** on Chrome, the **background page** on Firefox — so **you can close
-   the popup (or click away) and the download keeps going** and still saves.
-   Reopen the popup any time to watch progress. A **Stop & save** button keeps a
-   partial video, and **‹ Back** returns to the scan list while the download
-   continues. The **Download speed** selector (Normal / Fast / Hyper =
-   6 / 12 / 24 segments in parallel) trades politeness for speed on CDNs that
-   allow it; the choice is remembered.
+2. **UI & Selection** — Click the toolbar icon to see:
+   - Segment streams dropdown (HLS/DASH/Encrypted)
+   - Direct video files below
+   - Quality selector for DASH with bandwidth/size estimates
+   - "Test stream" validates access before downloading
+   
+3. **Smart Download** — Select quality and speed (Balanced/Fast/Aggressive):
+   - Parallel segment fetching (6/12/24 concurrent, configurable)
+   - Automatic encryption handling (decrypts on-the-fly)
+   - Token refresh on expiration (automatic manifest re-fetch)
+   - Segment retry with exponential backoff (up to 3 attempts)
+   - Live progress tracking in popup
+   - **Works even after closing popup** — download continues in background
 
-   For a **direct video file**, the popup lists it under *Direct video files* —
-   click **Download** and it's fetched in one request (with a progress bar) and
-   saved.
-5. **Convert to MP4 (optional)** — once the `.ts` is saved, press **Convert to
-   MP4**. The bundled [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)
-   runs `ffmpeg -i input.ts -c copy -movflags +faststart output.mp4` — the exact
-   stream-copy remux you'd run on the command line. **No re-encoding**, so it's
-   fast and lossless, and because it's real ffmpeg it fixes timestamps and works
-   with any codec the stream uses (H.264, HEVC, AAC, AC-3, …), producing a clean
-   progressive MP4 that plays in browsers, VLC, QuickTime, and mobile players.
-   The ~32 MB ffmpeg core is initialised on first use (a few seconds) and freed
-   afterwards.
+   Files are merged efficiently:
+   - HLS: byte concatenation into `.ts`
+   - DASH: proper frame-aligned merging
+   - All segments validated before merge
+
+4. **Convert to MP4 (optional)** — After download completes:
+   - Press "Convert to MP4" to remux via ffmpeg.wasm
+   - Stream copy (no re-encoding) — fast, lossless
+   - Produces standard progressive MP4 with fixed timestamps
+   - Works with any codec (H.264, HEVC, AAC, AC-3, Opus, etc.)
+
+5. **Advanced** — Content script intercepts:
+   - Blob URLs (for Vidplay-like players)
+   - Manifest updates (for token refresh)
+   - Auth tokens (automatic extraction from storage/cookies)
 
 ### Example segment URLs
 
@@ -122,45 +120,50 @@ artifacts (`adaptive-video-downloader-chrome` and
 
 ```
 src/
-  background.js     network logging + per-tab segment store, and the download
-                    coordinator (offscreen lifecycle on Chrome, in-page engine
-                    on Firefox; routes commands + saves via the Downloads API)
-  engine.js         the download engine: segment worker pool, merge, direct-file
-                    streaming, ffmpeg MP4 remux — runs in a persistent context
-  offscreen.html/.js  Chrome (MV3) host that runs engine.js out of view so the
-                    download survives the popup closing
-  popup.html/.css/.js   scan streams + direct files, speed selector, test, and a
-                    live progress view onto the background download
-  vendor/ffmpeg/    ffmpeg.wasm 0.12 — UMD wrapper + worker + single-threaded
-                    core (ffmpeg-core.wasm, ~32 MB); runs `-c copy` for MP4
-                    conversion. Loaded on demand by the engine.
-  icons/            generated PNGs
-manifest.chrome.json   Manifest V3 (Chrome) — adds "offscreen" + "downloads"
-manifest.firefox.json  Manifest V2 (Firefox) — loads engine.js in the bg page
-tools/make-icons.mjs   PNG icon generator
-build.sh               packages both browsers
+  popup.html/.css/.js     Modern UI: detect streams, select quality, live download progress
+  background.js           Network monitoring, tab stream store, download routing
+  engine.js               Core download engine: HLS segments, merging, MP4 conversion
+  offscreen.html/.js      Chrome (MV3): persistent download context
+  content-script.js       Page context interception: blobs, manifests, tokens
+  
+  manifest-parser.js      Unified HLS/DASH/Smooth Streaming parser
+  crypto-engine.js        AES-128 encryption/decryption with key caching
+  segment-manager.js      Batch download coordination, retry logic, quality selection
+  download-coordinator.js Bridge layer: manifest → segments → merge pipeline
+  
+  vendor/ffmpeg/          ffmpeg.wasm 0.12 (32 MB): `-c copy` MP4 remux
+  icons/                  Generated PNGs
+  
+manifest.chrome.json      Manifest V3 with content script, offscreen
+manifest.firefox.json     Manifest V2 with content script
+build.sh                  Builds both Chrome + Firefox packages
 ```
 
 ---
 
 ## Site support
 
-- **Works well:** generic HLS (`seg-N`) sites, TikTok, and many Instagram videos
-  (progressive MP4).
-- **Deliberately blocked (red lockdown view):** when the active tab is on a site
-  the extension can't help with, the popup turns red and explains why instead of
-  showing an empty scan. This covers:
-  - **YouTube** — throttled DASH with separate audio/video that needs its
-    obfuscated player code to download, and against its Terms of Service.
-    (`googlevideo.com` requests are also ignored so they're never offered as
-    broken downloads.)
-  - **DRM services** (Netflix, Disney+, Hulu, Max, Prime Video, Apple TV+,
-    Spotify) — the content is encrypted; it can't be downloaded and the
-    extension won't attempt to bypass DRM.
+**Works well:**
+- HLS streams (generic, token-protected, encrypted)
+- DASH streams (unencrypted adaptive content)
+- Vimeo, Wistia (encrypted HLS)
+- TikTok, Instagram (direct MP4)
+- Generic CDN segments with rotating tokens
+- Vidplay, similar protected platforms (with content script interception)
 
-  The blocked list lives in `UNSUPPORTED_SITES` in `src/popup.js`.
-- Some sites that require the page's cookies/`Referer` on the media URL may
-  reject the extension's direct fetch.
+**Intentionally not supported** (shown with clear explanation):
+- **YouTube** — Requires obfuscated player code; against Terms of Service
+- **DRM-protected** (Netflix, Disney+, Prime Video, etc.) — Content is encrypted with secure keys; won't be bypassed
+  
+**May require setup:**
+- Some pages with strict CORS policies may need CORS headers from your browser
+- Very old/custom streaming protocols may not auto-detect
+
+**Notes:**
+- HLS encryption (AES-128-CBC) is automatically handled
+- DASH streams auto-select best quality by default
+- Token expiration is detected and auto-refreshed for most sites
+- Download list is in `src/popup.js` (`UNSUPPORTED_SITES`)
 
 ## Notes & limitations
 
