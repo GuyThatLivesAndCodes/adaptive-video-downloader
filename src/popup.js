@@ -215,7 +215,11 @@ function renderMedia() {
   media.forEach((m) => {
     const item = document.createElement('div');
     item.className = 'media-item';
-    item.title = m.url; // full URL on hover, to tell candidates apart
+    item.title = m.url;
+
+    const icon = document.createElement('div');
+    icon.className = 'media-icon';
+    icon.textContent = '🎬';
 
     const info = document.createElement('div');
     info.className = 'media-info';
@@ -237,6 +241,7 @@ function renderMedia() {
       startDownload({ kind: 'file', url: m.url, label: mediaLabel(m.url), mime: m.mime });
     });
 
+    item.appendChild(icon);
     item.appendChild(info);
     item.appendChild(btn);
     list.appendChild(item);
@@ -355,7 +360,7 @@ $('backBtn').addEventListener('click', showScanView);
 /* ---------- init ---------- */
 
 function showNone() {
-  $('status').textContent = 'No video detected on this tab yet.';
+  $('status').textContent = 'No videos found yet';
   $('hint').classList.remove('hidden');
 }
 

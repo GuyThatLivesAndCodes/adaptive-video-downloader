@@ -10,11 +10,14 @@
     <div class="logo" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.42l2.3 2.3V4a1 1 0 0 1 1-1ZM5 18a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z"/></svg>
     </div>
-    <h1>Adaptive Video Downloader</h1>
+    <div>
+      <h1>Video Downloader</h1>
+      <span class="header-subtitle">Download videos from any site</span>
+    </div>
   </header>
 
   <main>
-    <div id="status" class="status">Scanning network activity&hellip;</div>
+    <div id="status" class="status">Looking for videos on this page...</div>
 
     <!-- Shown on sites we deliberately don't support (YouTube, DRM services) -->
     <section id="lockdown" class="lockdown hidden">
@@ -53,7 +56,7 @@
     </section>
 
     <p id="hint" class="hint hidden">
-      Open or play a video on this page, wait a moment, then reopen this popup.
+      📺 Tip: Open a video on this page and wait a moment, then reopen this popup. The downloader works with most video sites.
     </p>
 
     <!-- Live view onto the background download (runs even if this popup closes) -->
