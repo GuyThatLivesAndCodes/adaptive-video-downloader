@@ -290,7 +290,7 @@ body.locked .logo {
 
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
-button.danger, a.save, button.convert {
+button.danger, button.convert {
   padding: 9px 13px;
   border-radius: 8px;
   font-size: 12.5px;
@@ -305,11 +305,6 @@ button.danger {
   color: var(--danger);
 }
 button.danger:hover { background: rgba(248, 113, 113, 0.12); }
-a.save {
-  background: linear-gradient(160deg, var(--ok), #10b981);
-  color: #06231a;
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
-}
 button.convert {
   background: linear-gradient(160deg, var(--accent), var(--accent-2));
   color: #fff;

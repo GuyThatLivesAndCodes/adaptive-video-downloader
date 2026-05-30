@@ -3,9 +3,9 @@
   "name": "Adaptive Video Downloader",
   "version": "1.0.0",
   "description": "Detects adaptive (HLS) video segments on any page, then downloads and merges them into a single video file.",
-  "permissions": ["webRequest", "storage", "tabs", "<all_urls>"],
+  "permissions": ["webRequest", "storage", "tabs", "downloads", "<all_urls>"],
   "background": {
-    "scripts": ["background.js"],
+    "scripts": ["engine.js", "background.js"],
     "persistent": true
   },
   "browser_action": {

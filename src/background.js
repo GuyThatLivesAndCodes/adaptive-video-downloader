@@ -44,6 +44,84 @@ function scheduleSave() {
   }, 250);
 }
 
+/* ---------- download coordinator (popup ⇄ engine) ---------- */
+// The download engine runs in a persistent context so it survives the popup
+// closing: an offscreen document on Chrome (created on demand) or this very
+// background page on Firefox (where engine.js is loaded alongside this script
+// via manifest "background.scripts"). The popup talks to the engine only
+// through here; progress is mirrored into storage.session ('avd:state') for the
+// popup to render, and the finished blob is saved via the Downloads API.
+const STATE_KEY = 'avd:state';
+const FIREFOX_ENGINE = !!globalThis.AVD_Engine; // engine is in this page (Firefox)
+
+let lastAssignedSeq = 0;
+function nextSeq() {
+  // Monotonic across service-worker restarts (de-dupes commands in the engine).
+  lastAssignedSeq = Math.max(Date.now(), lastAssignedSeq + 1);
+  return lastAssignedSeq;
+}
+
+function publishState(state) {
+  api.storage.session.set({ [STATE_KEY]: state }).catch(() => {});
+}
+
+// Firefox: the engine lives in this page, so connect its outputs to the
+// privileged APIs directly (offscreen documents can't, hence the message dance
+// on Chrome below).
+if (FIREFOX_ENGINE) {
+  globalThis.AVD_Engine.onState = (state) => publishState(state);
+  globalThis.AVD_Engine.onSave = (url, filename) =>
+    api.downloads.download({ url, filename, saveAs: false }).then(() => true).catch(() => false);
+}
+
+let offscreenCreating = null;
+async function ensureOffscreen() {
+  if (!api.offscreen || !api.offscreen.createDocument) return; // Firefox / unsupported
+  try {
+    if (api.offscreen.hasDocument) {
+      if (await api.offscreen.hasDocument()) return;
+    } else if (api.runtime.getContexts) {
+      const ctx = await api.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+      if (ctx && ctx.length) return;
+    }
+  } catch (e) {
+    /* fall through and try to create */
+  }
+  if (!offscreenCreating) {
+    offscreenCreating = api.offscreen
+      .createDocument({
+        url: 'offscreen.html',
+        reasons: ['BLOBS'],
+        justification:
+          'Keep downloading and assembling the video in the background after the popup closes.',
+      })
+      .catch((e) => {
+        // A concurrent create may already have made it — that's fine.
+        if (!/already|single offscreen/i.test(String(e && e.message))) throw e;
+      });
+  }
+  try {
+    await offscreenCreating;
+  } finally {
+    offscreenCreating = null;
+  }
+}
+
+let pendingCmd = null;
+async function routeCommand(cmd) {
+  if (FIREFOX_ENGINE) {
+    globalThis.AVD_Engine.handleCommand(cmd);
+    return;
+  }
+  await ensureOffscreen();
+  // Remember the command briefly so a just-created document can pull it via its
+  // 'ready' ping; also send it now in case the document is already listening
+  // (the engine de-dupes by seq, so a double delivery is harmless).
+  pendingCmd = cmd;
+  setTimeout(() => { if (pendingCmd === cmd) pendingCmd = null; }, 3000);
+  api.runtime.sendMessage({ type: 'avd:engine:cmd', cmd }).catch(() => {});
+}
+
 function isSelf(details) {
   const origin = details.originUrl || details.initiator || details.documentUrl || '';
   return !!(origin && SELF_ORIGIN && origin.startsWith(SELF_ORIGIN));
@@ -144,8 +222,57 @@ api.tabs.onRemoved.addListener((tabId) => resetTab(tabId));
 
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
+    if (!msg || !msg.type) { sendResponse({ error: 'unknown_message' }); return; }
+
+    // ----- popup → coordinator: download controls -----
+    if (msg.type === 'avd:start') {
+      const job = {
+        ...msg.job,
+        id: 'job_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      };
+      await routeCommand({ seq: nextSeq(), action: 'start', job });
+      sendResponse({ ok: true, id: job.id });
+      return;
+    }
+    if (msg.type === 'avd:stop') {
+      await routeCommand({ seq: nextSeq(), action: 'stop' });
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg.type === 'avd:convert') {
+      await routeCommand({ seq: nextSeq(), action: 'convert' });
+      sendResponse({ ok: true });
+      return;
+    }
+
+    // ----- offscreen engine → coordinator (Chrome) -----
+    if (msg.type === 'avd:engine:ready') {
+      if (pendingCmd) api.runtime.sendMessage({ type: 'avd:engine:cmd', cmd: pendingCmd }).catch(() => {});
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg.type === 'avd:engine:state') {
+      publishState(msg.state);
+      sendResponse({ ok: true });
+      return;
+    }
+    if (msg.type === 'avd:download') {
+      let ok = false;
+      try {
+        if (api.downloads && api.downloads.download) {
+          await api.downloads.download({ url: msg.url, filename: msg.filename, saveAs: false });
+          ok = true;
+        }
+      } catch (e) {
+        ok = false;
+      }
+      sendResponse({ ok });
+      return;
+    }
+
+    // ----- popup → coordinator: detected streams on a tab -----
     await hydrate();
-    if (msg && msg.type === 'getStreams') {
+    if (msg.type === 'getStreams') {
       const tabKey = String(msg.tabId);
       const streams = streamStore[tabKey] || {};
       const mediaList = (mediaStore[tabKey] || []).slice().reverse(); // newest first
@@ -156,9 +283,9 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }),
         media: mediaList.map((m) => ({ url: m.url, mime: m.mime, size: m.size })),
       });
-    } else {
-      sendResponse({ error: 'unknown_message' });
+      return;
     }
+    sendResponse({ error: 'unknown_message' });
   })();
   return true; // keep the message channel open for the async sendResponse
 });

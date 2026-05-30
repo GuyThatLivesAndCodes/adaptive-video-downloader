@@ -27,17 +27,20 @@ It detects video as you browse using two methods:
    segment number on the captured URL (e.g. `seg-21` → `seg-1847`). Because the
    token is not tied to a single segment, a successful response confirms the
    stream can be fetched on demand.
-4. **Download** — press **Download video**. The popup switches to an in-popup
-   progress view (no separate tab opens) and fetches `seg-1 … seg-3000`:
+4. **Download** — press **Download video**. The popup switches to a live
+   progress view (no separate tab opens) while the **download runs in the
+   background** and fetches `seg-1 … seg-3000`:
    - each segment is tried up to **3 times** (1 try + 2 retries);
    - the **first segment that still fails is treated as the end of the video**;
    - all segments before it are concatenated (MPEG-TS segments merge by simple
      byte concatenation) into one `.ts` file and saved to your Downloads.
 
-   Everything runs inside the popup, so **keep it open until the download
-   finishes** — clicking elsewhere closes the popup and stops the download. A
-   **Stop & save** button lets you keep a partial video, and **‹ Back** returns
-   to the scan list. The **Download speed** selector (Normal / Fast / Hyper =
+   The fetching and merging happen in a persistent context — an **offscreen
+   document** on Chrome, the **background page** on Firefox — so **you can close
+   the popup (or click away) and the download keeps going** and still saves.
+   Reopen the popup any time to watch progress. A **Stop & save** button keeps a
+   partial video, and **‹ Back** returns to the scan list while the download
+   continues. The **Download speed** selector (Normal / Fast / Hyper =
    6 / 12 / 24 segments in parallel) trades politeness for speed on CDNs that
    allow it; the choice is remembered.
 
@@ -111,14 +114,20 @@ artifacts (`adaptive-video-downloader-chrome` and
 
 ```
 src/
-  background.js     network logging + per-tab segment store (SW / event page)
-  popup.html/.css/.js   scan streams + direct files, speed selector, test, and
-                        the in-popup downloader (fetch, merge, save, convert)
-  vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0), loaded
-                        on demand by the popup for MP4 conversion
+  background.js     network logging + per-tab segment store, and the download
+                    coordinator (offscreen lifecycle on Chrome, in-page engine
+                    on Firefox; routes commands + saves via the Downloads API)
+  engine.js         the download engine: segment worker pool, merge, direct-file
+                    streaming, lossless MP4 remux — runs in a persistent context
+  offscreen.html/.js  Chrome (MV3) host that runs engine.js out of view so the
+                    download survives the popup closing
+  popup.html/.css/.js   scan streams + direct files, speed selector, test, and a
+                    live progress view onto the background download
+  vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0), loaded on
+                    demand for MP4 conversion
   icons/            generated PNGs
-manifest.chrome.json   Manifest V3 (Chrome)
-manifest.firefox.json  Manifest V2 (Firefox)
+manifest.chrome.json   Manifest V3 (Chrome) — adds "offscreen" + "downloads"
+manifest.firefox.json  Manifest V2 (Firefox) — loads engine.js in the bg page
 tools/make-icons.mjs   PNG icon generator
 build.sh               packages both browsers
 ```
@@ -146,6 +155,11 @@ build.sh               packages both browsers
 
 ## Notes & limitations
 
+- The download runs in the background and saves itself via the **Downloads API**
+  (so it lands in your default downloads folder without a Save dialog). It keeps
+  going if you close the popup; it only stops if you press **Stop**, start a
+  different download, or the browser shuts the extension down. One download runs
+  at a time — starting another replaces the current one.
 - Segments are merged in memory, so extremely long videos (toward the 3000-cap)
   can use a lot of RAM. MP4 conversion holds both the source and output in
   memory while remuxing.
