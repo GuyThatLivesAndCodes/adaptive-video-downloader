@@ -48,11 +48,14 @@ It detects video as you browse using two methods:
    click **Download** and it's fetched in one request (with a progress bar) and
    saved.
 5. **Convert to MP4 (optional)** — once the `.ts` is saved, press **Convert to
-   MP4**. The bundled [mux.js](https://github.com/videojs/mux.js) losslessly
-   remuxes the MPEG-TS into an `.mp4` (container change only — **no
-   re-encoding**, so it's fast and quality is identical). The result plays in
-   browsers, VLC, QuickTime, and mobile players. Works for standard H.264 video
-   + AAC audio HLS streams.
+   MP4**. The bundled [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)
+   runs `ffmpeg -i input.ts -c copy -movflags +faststart output.mp4` — the exact
+   stream-copy remux you'd run on the command line. **No re-encoding**, so it's
+   fast and lossless, and because it's real ffmpeg it fixes timestamps and works
+   with any codec the stream uses (H.264, HEVC, AAC, AC-3, …), producing a clean
+   progressive MP4 that plays in browsers, VLC, QuickTime, and mobile players.
+   The ~32 MB ffmpeg core is initialised on first use (a few seconds) and freed
+   afterwards.
 
 ### Example segment URLs
 
@@ -118,13 +121,14 @@ src/
                     coordinator (offscreen lifecycle on Chrome, in-page engine
                     on Firefox; routes commands + saves via the Downloads API)
   engine.js         the download engine: segment worker pool, merge, direct-file
-                    streaming, lossless MP4 remux — runs in a persistent context
+                    streaming, ffmpeg MP4 remux — runs in a persistent context
   offscreen.html/.js  Chrome (MV3) host that runs engine.js out of view so the
                     download survives the popup closing
   popup.html/.css/.js   scan streams + direct files, speed selector, test, and a
                     live progress view onto the background download
-  vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0), loaded on
-                    demand for MP4 conversion
+  vendor/ffmpeg/    ffmpeg.wasm 0.12 — UMD wrapper + worker + single-threaded
+                    core (ffmpeg-core.wasm, ~32 MB); runs `-c copy` for MP4
+                    conversion. Loaded on demand by the engine.
   icons/            generated PNGs
 manifest.chrome.json   Manifest V3 (Chrome) — adds "offscreen" + "downloads"
 manifest.firefox.json  Manifest V2 (Firefox) — loads engine.js in the bg page
@@ -161,12 +165,14 @@ build.sh               packages both browsers
   different download, or the browser shuts the extension down. One download runs
   at a time — starting another replaces the current one.
 - Segments are merged in memory, so extremely long videos (toward the 3000-cap)
-  can use a lot of RAM. MP4 conversion holds both the source and output in
-  memory while remuxing.
-- **MP4 output is a fragmented MP4** (fMP4). It plays everywhere modern; a few
-  legacy desktop tools prefer progressive MP4. Only H.264/AAC streams can be
-  remuxed — other codecs (e.g. HEVC) keep the `.ts`.
-- To refresh the bundled remuxer: `npm install` then `npm run vendor`.
+  can use a lot of RAM. MP4 conversion additionally holds the input and output
+  in ffmpeg's in-memory filesystem alongside the ~32 MB core.
+- **MP4 conversion is a stream copy** (`-c copy`) — no transcoding, so it's
+  lossless and keeps whatever codec the source uses. The output is a standard
+  progressive MP4 with `+faststart`. (If a stream's codec genuinely can't sit in
+  an MP4 container, ffmpeg errors and the `.ts` remains saved.)
+- The bundled ffmpeg core is committed to the repo so the build works as-is. To
+  refresh it: `npm install` then `npm run vendor`.
 - Works for token-signed CDN segments that don't require the original page's
   `Referer`/`Origin`.
 - This is a general media tool. Only download content you have the right to.

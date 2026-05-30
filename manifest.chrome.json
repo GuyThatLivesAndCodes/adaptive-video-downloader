@@ -5,6 +5,9 @@
   "description": "Detects adaptive (HLS) video segments on any page, then downloads and merges them into a single video file.",
   "permissions": ["webRequest", "storage", "tabs", "offscreen", "downloads"],
   "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "background": {
     "service_worker": "background.js"
   },

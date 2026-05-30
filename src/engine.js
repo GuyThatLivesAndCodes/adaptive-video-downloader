@@ -304,130 +304,76 @@
     }
   }
 
-  /* ---------- optional lossless MP4 conversion (mux.js, lazy-loaded) ---------- */
+  /* ---------- MP4 conversion via ffmpeg.wasm (lazy-loaded) ---------- */
+  //
+  // Runs exactly what you'd run by hand — `ffmpeg -i input.ts -c copy
+  // output.mp4` — inside a WebAssembly ffmpeg. A stream copy (no re-encode) is
+  // fast and lossless, repairs timestamps, and handles whatever codecs the
+  // source uses (H.264, HEVC, AAC, AC-3, …) instead of the old remuxer's
+  // H.264/AAC-only path. ffmpeg runs in its own worker that the wrapper spawns;
+  // the ~32 MB core is initialised on first use and torn down afterwards.
 
-  let muxLoading = null;
-  function loadMuxjs() {
-    if (typeof muxjs !== 'undefined' && muxjs.Transmuxer) return Promise.resolve();
-    if (muxLoading) return muxLoading;
-    muxLoading = new Promise((resolve, reject) => {
+  let ff = null; // FFmpeg instance while loaded
+  let ffLoading = null;
+
+  function ffUrl(file) {
+    // Resolve against this context's own document (offscreen.html / bg page).
+    return new URL('vendor/ffmpeg/' + file, location.href).href;
+  }
+
+  function loadFFmpegScript() {
+    if (globalThis.FFmpegWASM && globalThis.FFmpegWASM.FFmpeg) return Promise.resolve();
+    return new Promise((resolve, reject) => {
       const doc = typeof document !== 'undefined' ? document : null;
       if (!doc) {
-        reject(new Error('no DOM available to load the converter'));
+        reject(new Error('no DOM available to load ffmpeg'));
         return;
       }
       const s = doc.createElement('script');
-      s.src = 'vendor/mux-mp4.min.js';
+      s.src = ffUrl('ffmpeg.js'); // UMD build → globalThis.FFmpegWASM
       s.onload = () => resolve();
-      s.onerror = () => reject(new Error('failed to load the MP4 converter'));
+      s.onerror = () => reject(new Error('failed to load ffmpeg.js'));
       (doc.head || doc.documentElement).appendChild(s);
     });
-    return muxLoading;
   }
 
-  // --- minimal fMP4 box reader, used only to report the output duration ---
-  function avdU32(b, o) {
-    return b[o] * 16777216 + b[o + 1] * 65536 + b[o + 2] * 256 + b[o + 3];
-  }
-  function avdReadBoxes(buf, start, end, cb) {
-    let o = start;
-    while (o + 8 <= end) {
-      let size = avdU32(buf, o);
-      let header = 8;
-      const type = String.fromCharCode(buf[o + 4], buf[o + 5], buf[o + 6], buf[o + 7]);
-      if (size === 1) {
-        size = avdU32(buf, o + 8) * 4294967296 + avdU32(buf, o + 12);
-        header = 16;
-      } else if (size === 0) {
-        size = end - o;
-      }
-      if (size < header || o + size > end) break;
-      cb(type, o + header, o + size);
-      o += size;
-    }
-  }
-  function avdVideoTrack(init) {
-    let chosen = null;
-    let first = null;
-    avdReadBoxes(init, 0, init.length, (t, ps, pe) => {
-      if (t !== 'moov') return;
-      avdReadBoxes(init, ps, pe, (t1, cs, ce) => {
-        if (t1 !== 'trak') return;
-        const tr = { id: 0, timescale: 0, vid: false };
-        avdReadBoxes(init, cs, ce, (t2, cs2, ce2) => {
-          if (t2 === 'tkhd') tr.id = init[cs2] === 1 ? avdU32(init, cs2 + 20) : avdU32(init, cs2 + 12);
-          else if (t2 === 'mdia')
-            avdReadBoxes(init, cs2, ce2, (t3, cs3) => {
-              if (t3 === 'mdhd') tr.timescale = init[cs3] === 1 ? avdU32(init, cs3 + 20) : avdU32(init, cs3 + 12);
-              else if (t3 === 'hdlr') {
-                const h = String.fromCharCode(init[cs3 + 8], init[cs3 + 9], init[cs3 + 10], init[cs3 + 11]);
-                if (h === 'vide') tr.vid = true;
-              }
-            });
-        });
-        if (!first) first = tr;
-        if (tr.vid && !chosen) chosen = tr;
-      });
-    });
-    return chosen || first;
-  }
-  function avdSumTrun(frag, trackId) {
-    let sum = 0;
-    avdReadBoxes(frag, 0, frag.length, (t, ps, pe) => {
-      if (t !== 'moof') return;
-      avdReadBoxes(frag, ps, pe, (t1, cs, ce) => {
-        if (t1 !== 'traf') return;
-        let id = 0;
-        let defDur = 0;
-        let hasDef = false;
-        let fragSum = 0;
-        avdReadBoxes(frag, cs, ce, (t2, cs2) => {
-          if (t2 === 'tfhd') {
-            const f = avdU32(frag, cs2) & 0xffffff;
-            id = avdU32(frag, cs2 + 4);
-            let off = cs2 + 8;
-            if (f & 0x01) off += 8;
-            if (f & 0x02) off += 4;
-            if (f & 0x08) { defDur = avdU32(frag, off); hasDef = true; }
-          } else if (t2 === 'trun') {
-            const f = avdU32(frag, cs2) & 0xffffff;
-            const c = avdU32(frag, cs2 + 4);
-            let off = cs2 + 8;
-            if (f & 0x01) off += 4;
-            if (f & 0x04) off += 4;
-            for (let i = 0; i < c; i++) {
-              if (f & 0x100) { fragSum += avdU32(frag, off); off += 4; }
-              else if (hasDef) { fragSum += defDur; }
-              if (f & 0x200) off += 4;
-              if (f & 0x400) off += 4;
-              if (f & 0x800) off += 4;
-            }
+  async function getFFmpeg() {
+    if (ff && ff.loaded) return ff;
+    if (!ffLoading) {
+      ffLoading = (async () => {
+        await loadFFmpegScript();
+        const inst = new globalThis.FFmpegWASM.FFmpeg();
+        inst.on('progress', ({ progress }) => {
+          if (S.convert.state !== 'running') return;
+          if (typeof progress === 'number' && progress >= 0 && progress <= 1) {
+            S.convert.status = `Converting to MP4 (stream copy)… ${Math.min(99, Math.round(progress * 100))}%`;
+            emit();
           }
         });
-        if (id === trackId) sum += fragSum;
-      });
-    });
-    return sum;
-  }
-  function mp4DurationSeconds(chunks) {
-    try {
-      if (!chunks || chunks.length < 2) return null;
-      const track = avdVideoTrack(chunks[0]);
-      if (!track || !track.timescale) return null;
-      let total = 0;
-      for (let i = 1; i < chunks.length; i++) total += avdSumTrun(chunks[i], track.id);
-      return total ? total / track.timescale : null;
-    } catch (e) {
-      return null;
+        // Same-origin UMD core; the wrapper auto-loads its classic worker
+        // (vendor/ffmpeg/814.ffmpeg.js) relative to ffmpeg.js.
+        await inst.load({ coreURL: ffUrl('ffmpeg-core.js'), wasmURL: ffUrl('ffmpeg-core.wasm') });
+        return inst;
+      })();
     }
+    try {
+      ff = await ffLoading;
+    } finally {
+      ffLoading = null;
+    }
+    return ff;
   }
-  function formatTime(totalSecs) {
-    const s = Math.round(totalSecs);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const p = (n) => String(n).padStart(2, '0');
-    return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`;
+
+  function concatParts(parts) {
+    let total = 0;
+    for (const p of parts) total += p.length;
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) {
+      out.set(p, off);
+      off += p.length;
+    }
+    return out;
   }
 
   async function convert() {
@@ -440,79 +386,58 @@
     if (S.convert.state === 'running' || S.convert.state === 'done') return;
 
     S.convert.state = 'running';
-    S.convert.status = 'Loading converter…';
+    S.convert.status = 'Loading the MP4 converter (first use initialises ~32 MB)…';
     emit(true);
 
+    let ffmpeg;
     try {
-      await loadMuxjs();
+      ffmpeg = await getFFmpeg();
     } catch (e) {
       S.convert.state = 'error';
-      S.convert.status = 'MP4 converter did not load.';
+      S.convert.status = 'MP4 converter (ffmpeg) failed to load: ' + (e && e.message ? e.message : e);
       emit(true);
       return;
     }
-    if (typeof muxjs === 'undefined' || !muxjs.Transmuxer) {
-      S.convert.state = 'error';
-      S.convert.status = 'MP4 converter did not load.';
-      emit(true);
-      return;
-    }
-
-    const transmuxer = new muxjs.Transmuxer({ remux: true });
-    const out = [];
-    let init = null;
-    let sawData = false;
-    transmuxer.on('data', (seg) => {
-      sawData = true;
-      if (init === null) {
-        init = seg.initSegment; // moov + track definitions (once)
-        out.push(init);
-      }
-      out.push(seg.data); // moof + mdat fragments
-    });
 
     try {
-      // Flush after EACH segment. mux.js must process one segment per flush
-      // cycle; pushing them all and flushing once makes it compute a frame
-      // duration across a segment boundary where the decode timestamp jumps
-      // backwards, which gets encoded as an unsigned 32-bit value (~13h) and
-      // inflates the total duration. Per-segment flushing keeps timing correct.
-      for (let i = 0; i < finalParts.length; i++) {
-        transmuxer.push(finalParts[i]);
-        transmuxer.flush();
-        if (i % 20 === 0) {
-          S.convert.status = `Remuxing to MP4… ${i + 1}/${finalParts.length} segments`;
-          emit();
-          await new Promise((r) => setTimeout(r)); // yield
-        }
-      }
-    } catch (e) {
-      S.convert.state = 'error';
-      S.convert.status = 'Conversion failed: ' + (e && e.message ? e.message : e);
+      const input = concatParts(finalParts);
+      S.convert.status = 'Converting to MP4 (stream copy)…';
       emit(true);
-      return;
-    }
+      await ffmpeg.writeFile('input.ts', input);
+      // ffmpeg -i input.ts -c copy -movflags +faststart output.mp4
+      const code = await ffmpeg.exec([
+        '-i', 'input.ts',
+        '-c', 'copy',
+        '-movflags', '+faststart',
+        'output.mp4',
+      ]);
+      if (code !== 0) throw new Error('ffmpeg exited with code ' + code);
+      const out = await ffmpeg.readFile('output.mp4'); // Uint8Array
+      if (!out || !out.length) throw new Error('no output produced');
+      try { await ffmpeg.deleteFile('input.ts'); } catch (e) {}
+      try { await ffmpeg.deleteFile('output.mp4'); } catch (e) {}
 
-    if (!sawData || out.length === 0) {
+      const blob = new Blob([out], { type: 'video/mp4' });
+      const fname = baseName + '.mp4';
+      const ok = await save(blob, fname);
+      const mb = (blob.size / 1048576).toFixed(1);
+      S.convert.state = 'done';
+      S.convert.name = fname;
+      S.convert.status = `MP4 saved (${mb} MB) → ${fname}` + (ok ? '' : ' (auto-save failed)');
+      log(`Converted to ${fname} with ffmpeg -c copy (${mb} MB).`);
+      emit(true);
+    } catch (e) {
       S.convert.state = 'error';
       S.convert.status =
-        'Could not convert — the stream likely uses a codec other than H.264/AAC. Your .ts file is still saved.';
+        'Conversion failed: ' + (e && e.message ? e.message : e) + '. Your .ts file is still saved.';
       emit(true);
-      return;
+    } finally {
+      // Release the ~32 MB core; it reloads on the next conversion.
+      try {
+        if (ff) ff.terminate();
+      } catch (e) {}
+      ff = null;
     }
-
-    const blob = new Blob(out, { type: 'video/mp4' });
-    const fname = baseName + '.mp4';
-    const ok = await save(blob, fname);
-
-    const mb = (blob.size / 1048576).toFixed(1);
-    const durSecs = mp4DurationSeconds(out);
-    const durStr = durSecs ? ` · ${formatTime(durSecs)}` : '';
-    S.convert.state = 'done';
-    S.convert.name = fname;
-    S.convert.status = `MP4 saved (${mb} MB${durStr}) → ${fname}` + (ok ? '' : ' (auto-save failed)');
-    log(`Converted to ${fname} (${mb} MB${durStr}).`);
-    emit(true);
   }
 
   /* ---------- command handling ---------- */
