@@ -29,11 +29,31 @@ function hydrate() {
       .then((d) => {
         streamStore = (d && d[STREAMS_KEY]) || {};
         mediaStore = (d && d[MEDIA_KEY]) || {};
+        pruneStreams(); // drop entries from an older storage format (no pre/post)
         hydrated = true;
       })
       .catch(() => { streamStore = {}; mediaStore = {}; hydrated = true; });
   }
   return hydrating;
+}
+
+// A previous version stored streams as { url, max, min, count }; this version
+// needs { pre, post, pad, … }. Discard anything that doesn't match the current
+// shape so stale data can't poison the list (it would build "undefinedN.ts").
+function pruneStreams() {
+  let changed = false;
+  for (const tab of Object.keys(streamStore)) {
+    const streams = streamStore[tab] || {};
+    for (const key of Object.keys(streams)) {
+      const v = streams[key];
+      if (!v || typeof v.pre !== 'string' || typeof v.post !== 'string') {
+        delete streams[key];
+        changed = true;
+      }
+    }
+    if (Object.keys(streams).length === 0) delete streamStore[tab];
+  }
+  if (changed) scheduleSave();
 }
 const ready = hydrate();
 
@@ -339,19 +359,21 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const streams = streamStore[tabKey] || {};
       const mediaList = (mediaStore[tabKey] || []).slice().reverse(); // newest first
       sendResponse({
-        streams: Object.keys(streams).map((key) => {
-          const v = streams[key];
-          return {
-            key,
-            pre: v.pre,
-            post: v.post,
-            pad: v.pad || 0,
-            min: v.min,
-            max: v.max,
-            count: v.count,
-            ext: v.ext || '',
-          };
-        }),
+        streams: Object.keys(streams)
+          .filter((key) => streams[key] && typeof streams[key].pre === 'string')
+          .map((key) => {
+            const v = streams[key];
+            return {
+              key,
+              pre: v.pre,
+              post: v.post,
+              pad: v.pad || 0,
+              min: v.min,
+              max: v.max,
+              count: v.count,
+              ext: v.ext || '',
+            };
+          }),
         media: mediaList.map((m) => ({ url: m.url, mime: m.mime, size: m.size })),
       });
       return;

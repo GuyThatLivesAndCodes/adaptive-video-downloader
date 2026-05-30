@@ -169,7 +169,15 @@
   }
 
   async function runHls() {
-    segPre = job.pre || '';
+    if (!job.pre || typeof job.pre !== 'string') {
+      S.phase = 'error';
+      S.title = 'Stream info missing';
+      S.stat = 'Reload the video page and scan again, then download.';
+      S.canStop = false;
+      emit(true);
+      return;
+    }
+    segPre = job.pre;
     segPost = job.post || '';
     segPad = job.pad || 0;
     startN = job.start === 0 ? 0 : 1;

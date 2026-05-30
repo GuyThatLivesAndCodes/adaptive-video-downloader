@@ -366,7 +366,8 @@ async function populateScan(tab) {
   } catch (e) {
     resp = null;
   }
-  streams = (resp && resp.streams) || [];
+  // Ignore malformed entries (e.g. stale data from an older version).
+  streams = ((resp && resp.streams) || []).filter((s) => s && typeof s.pre === 'string');
   media = (resp && resp.media) || [];
 
   if (streams.length === 0 && media.length === 0) { showNone(); return; }
