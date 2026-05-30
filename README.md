@@ -17,38 +17,50 @@ It detects video as you browse using two methods:
 ## How it works
 
 1. **Logging** — once installed, the background script watches network traffic
-   on every tab (`webRequest`). Each segment URL containing `seg-<number>` is
-   recorded per tab. Only the freshest URL per stream is kept (the signed token
-   is shared across all segments of a video), along with the highest segment
-   number seen.
-2. **Scan** — click the toolbar icon. The popup asks the background script for
-   the segment URLs captured on the current tab and lists each detected video.
+   on every tab (`webRequest`) and records *every* video-ish request (`.ts`,
+   `.mp4`, `.m4s`, `.webm`, …, plus anything served with a `video/*`
+   Content-Type). Numbered segments are recognised by an incrementing index —
+   `seg-12`, `segment_12`, `chunk-12`, `frag12`, or a bare `00012.ts` — and URLs
+   that differ **only** by that index converge into a single template (other
+   numbers, like `720p`, stay, so resolutions remain separate). The freshest
+   signed token is kept, along with the lowest/highest index seen. Everything
+   else is listed as a direct file.
+2. **Scan** — click the toolbar icon. The popup lists every captured candidate:
+   segment streams in a dropdown (pick one) and direct files below, so if the
+   first guess is wrong you can choose another. Hover any entry for its full URL.
 3. **Random test** — the popup immediately fires one request at a *random*
-   segment number on the captured URL (e.g. `seg-21` → `seg-1847`). Because the
-   token is not tied to a single segment, a successful response confirms the
-   stream can be fetched on demand.
-4. **Download** — press **Download video**. A dedicated progress tab opens and
-   fetches `seg-1 … seg-3000`:
+   index on the selected stream (e.g. `#21` → `#1847`). Because the token is not
+   tied to a single segment, a successful response confirms the stream can be
+   fetched on demand.
+4. **Download** — press **Download video**. The popup switches to a live
+   progress view (no separate tab opens) while the **download runs in the
+   background**, iterating the index from the start up to a 3000 cap:
    - each segment is tried up to **3 times** (1 try + 2 retries);
    - the **first segment that still fails is treated as the end of the video**;
    - all segments before it are concatenated (MPEG-TS segments merge by simple
      byte concatenation) into one `.ts` file and saved to your Downloads.
 
-   Downloading runs in a real tab (not the popup) so it keeps going even if you
-   click away, and a **Stop & save** button lets you keep a partial video.
-   The **Download speed** selector (Normal / Fast / Hyper = 6 / 12 / 24 segments
-   in parallel) trades politeness for speed on CDNs that allow it; the choice is
-   remembered.
+   The fetching and merging happen in a persistent context — an **offscreen
+   document** on Chrome, the **background page** on Firefox — so **you can close
+   the popup (or click away) and the download keeps going** and still saves.
+   Reopen the popup any time to watch progress. A **Stop & save** button keeps a
+   partial video, and **‹ Back** returns to the scan list while the download
+   continues. The **Download speed** selector (Normal / Fast / Hyper =
+   6 / 12 / 24 segments in parallel) trades politeness for speed on CDNs that
+   allow it; the choice is remembered.
 
    For a **direct video file**, the popup lists it under *Direct video files* —
    click **Download** and it's fetched in one request (with a progress bar) and
    saved.
 5. **Convert to MP4 (optional)** — once the `.ts` is saved, press **Convert to
-   MP4**. The bundled [mux.js](https://github.com/videojs/mux.js) losslessly
-   remuxes the MPEG-TS into an `.mp4` (container change only — **no
-   re-encoding**, so it's fast and quality is identical). The result plays in
-   browsers, VLC, QuickTime, and mobile players. Works for standard H.264 video
-   + AAC audio HLS streams.
+   MP4**. The bundled [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)
+   runs `ffmpeg -i input.ts -c copy -movflags +faststart output.mp4` — the exact
+   stream-copy remux you'd run on the command line. **No re-encoding**, so it's
+   fast and lossless, and because it's real ffmpeg it fixes timestamps and works
+   with any codec the stream uses (H.264, HEVC, AAC, AC-3, …), producing a clean
+   progressive MP4 that plays in browsers, VLC, QuickTime, and mobile players.
+   The ~32 MB ffmpeg core is initialised on first use (a few seconds) and freed
+   afterwards.
 
 ### Example segment URLs
 
@@ -110,13 +122,21 @@ artifacts (`adaptive-video-downloader-chrome` and
 
 ```
 src/
-  background.js     network logging + per-tab segment store (SW / event page)
-  popup.html/.css/.js   scan streams + direct files, speed selector, test
-  progress.html/.css/.js  download (segments or direct file), merge, save, convert
-  vendor/mux-mp4.min.js   mux.js — MPEG-TS → MP4 remuxer (Apache-2.0)
+  background.js     network logging + per-tab segment store, and the download
+                    coordinator (offscreen lifecycle on Chrome, in-page engine
+                    on Firefox; routes commands + saves via the Downloads API)
+  engine.js         the download engine: segment worker pool, merge, direct-file
+                    streaming, ffmpeg MP4 remux — runs in a persistent context
+  offscreen.html/.js  Chrome (MV3) host that runs engine.js out of view so the
+                    download survives the popup closing
+  popup.html/.css/.js   scan streams + direct files, speed selector, test, and a
+                    live progress view onto the background download
+  vendor/ffmpeg/    ffmpeg.wasm 0.12 — UMD wrapper + worker + single-threaded
+                    core (ffmpeg-core.wasm, ~32 MB); runs `-c copy` for MP4
+                    conversion. Loaded on demand by the engine.
   icons/            generated PNGs
-manifest.chrome.json   Manifest V3 (Chrome)
-manifest.firefox.json  Manifest V2 (Firefox)
+manifest.chrome.json   Manifest V3 (Chrome) — adds "offscreen" + "downloads"
+manifest.firefox.json  Manifest V2 (Firefox) — loads engine.js in the bg page
 tools/make-icons.mjs   PNG icon generator
 build.sh               packages both browsers
 ```
@@ -144,13 +164,20 @@ build.sh               packages both browsers
 
 ## Notes & limitations
 
+- The download runs in the background and saves itself via the **Downloads API**
+  (so it lands in your default downloads folder without a Save dialog). It keeps
+  going if you close the popup; it only stops if you press **Stop**, start a
+  different download, or the browser shuts the extension down. One download runs
+  at a time — starting another replaces the current one.
 - Segments are merged in memory, so extremely long videos (toward the 3000-cap)
-  can use a lot of RAM. MP4 conversion holds both the source and output in
-  memory while remuxing.
-- **MP4 output is a fragmented MP4** (fMP4). It plays everywhere modern; a few
-  legacy desktop tools prefer progressive MP4. Only H.264/AAC streams can be
-  remuxed — other codecs (e.g. HEVC) keep the `.ts`.
-- To refresh the bundled remuxer: `npm install` then `npm run vendor`.
+  can use a lot of RAM. MP4 conversion additionally holds the input and output
+  in ffmpeg's in-memory filesystem alongside the ~32 MB core.
+- **MP4 conversion is a stream copy** (`-c copy`) — no transcoding, so it's
+  lossless and keeps whatever codec the source uses. The output is a standard
+  progressive MP4 with `+faststart`. (If a stream's codec genuinely can't sit in
+  an MP4 container, ffmpeg errors and the `.ts` remains saved.)
+- The bundled ffmpeg core is committed to the repo so the build works as-is. To
+  refresh it: `npm install` then `npm run vendor`.
 - Works for token-signed CDN segments that don't require the original page's
   `Referer`/`Origin`.
 - This is a general media tool. Only download content you have the right to.

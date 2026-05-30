@@ -1,7 +1,13 @@
 // Adaptive Video Downloader — popup
+//
+// The popup only scans for videos and acts as a live view onto a download. The
+// actual downloading runs in a persistent context (offscreen document on
+// Chrome, background page on Firefox) so it keeps going — and still saves — even
+// after this popup closes. The popup sends commands through the background and
+// renders progress from storage.session ('avd:state').
 const api = globalThis.browser ?? globalThis.chrome;
-const SEG_RE = /seg-(\d+)/;
 const $ = (id) => document.getElementById(id);
+const STATE_KEY = 'avd:state';
 
 let streams = [];
 let media = [];
@@ -55,16 +61,37 @@ function showLockdown(site) {
   $('lockdown').classList.remove('hidden');
 }
 
-function buildSegUrl(template, n) {
-  return template.replace(SEG_RE, 'seg-' + n);
+// A segment URL = pre + <index number> + post (post carries the signed token).
+function segUrl(s, n) {
+  const num = s.pad > 0 ? String(n).padStart(s.pad, '0') : String(n);
+  return s.pre + num + s.post;
 }
 
-function labelFor(url) {
+// First index to try: 0 only if the stream was seen starting at 0, else 1.
+function streamStartN(s) {
+  return s.min === 0 ? 0 : 1;
+}
+
+// Display form of the family, e.g. https://cdn/abc/720p/seg-#.ts (token-free).
+function streamFamily(s) {
+  return (s.pre + '#' + s.post).split('?')[0];
+}
+
+function pathTail(u) {
   try {
-    const u = new URL(url);
+    const p = new URL(u).pathname.split('/').filter(Boolean);
+    return p.slice(-2).join('/') || u;
+  } catch (e) {
+    return u;
+  }
+}
+
+// A short, stable name for the saved file — the directory holding the segments.
+function streamLabel(s) {
+  try {
+    const u = new URL(streamFamily(s));
     const parts = u.pathname.split('/').filter(Boolean);
-    const i = parts.findIndex((p) => SEG_RE.test(p));
-    let name = i > 0 ? parts[i - 1] : parts[i] || u.hostname;
+    let name = parts.length >= 2 ? parts[parts.length - 2] : parts[0] || u.hostname;
     name = decodeURIComponent(name);
     if (name.length > 40) name = name.slice(0, 38) + '…';
     return name || u.hostname;
@@ -92,17 +119,6 @@ function formatSize(bytes) {
   return Math.max(1, Math.round(bytes / 1024)) + ' KB';
 }
 
-function newJobId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
-
-async function startJob(job) {
-  const jobId = newJobId();
-  await api.storage.session.set({ ['avd:job:' + jobId]: { ...job, createdAt: Date.now() } });
-  await api.tabs.create({ url: api.runtime.getURL('progress.html?job=' + jobId) });
-  window.close();
-}
-
 /* ---------- HLS segment streams ---------- */
 
 function current() {
@@ -111,7 +127,7 @@ function current() {
 
 function updateMeta() {
   const s = current();
-  $('meta').textContent = `${s.count} segment request(s) seen · highest seg-${s.max}`;
+  $('meta').textContent = `${s.count} request(s) · #${s.min}–${s.max} · ${pathTail(streamFamily(s))}`;
 }
 
 function activeConcurrency() {
@@ -133,7 +149,9 @@ function renderStreams() {
   streams.forEach((s, i) => {
     const o = document.createElement('option');
     o.value = String(i);
-    o.textContent = labelFor(s.url);
+    const ext = s.ext ? '.' + s.ext : '';
+    o.textContent = `${streamLabel(s)}${ext} · ${s.count}× · up to #${s.max}`;
+    o.title = streamFamily(s);
     sel.appendChild(o);
   });
   sel.addEventListener('change', () => { updateMeta(); runRandomTest(); });
@@ -142,33 +160,44 @@ function renderStreams() {
 
 async function runRandomTest() {
   const s = current();
-  const upper = Math.max(s.max, 2);
-  const n = 1 + Math.floor(Math.random() * upper); // arbitrary segment within the stream
-  const url = buildSegUrl(s.url, n);
+  const start = streamStartN(s);
+  const upper = Math.max(s.max, start + 1);
+  const n = start + Math.floor(Math.random() * (upper - start + 1)); // arbitrary index in range
+  const url = segUrl(s, n);
   const el = $('testResult');
   el.className = 'test';
   el.classList.remove('hidden');
-  el.textContent = `Testing a random segment (seg-${n})…`;
+  el.textContent = `Testing a random segment (#${n})…`;
   try {
     const res = await fetch(url, { cache: 'no-store' });
     if (res.body && res.body.cancel) res.body.cancel().catch(() => {});
     if (res.ok) {
       el.classList.add('ok');
-      el.textContent = `Server answered random seg-${n} (HTTP ${res.status}). Ready to download.`;
+      el.textContent = `Server answered random #${n} (HTTP ${res.status}). Ready to download.`;
     } else {
       el.classList.add('warn');
-      el.textContent = `Random seg-${n} returned HTTP ${res.status}. You can still try the download.`;
+      el.textContent = `Random #${n} returned HTTP ${res.status}. You can still try the download.`;
     }
   } catch (e) {
     el.classList.add('warn');
-    el.textContent = `Random seg-${n} request failed (${e.message || 'network error'}). You can still try the download.`;
+    el.textContent = `Random #${n} request failed (${e.message || 'network error'}). You can still try the download.`;
   }
 }
 
 $('downloadBtn').addEventListener('click', () => {
   const s = current();
   const { conc, speed } = activeConcurrency();
-  startJob({ kind: 'hls', template: s.url, label: labelFor(s.url), max: s.max, concurrency: conc, speed });
+  startDownload({
+    kind: 'hls',
+    pre: s.pre,
+    post: s.post,
+    pad: s.pad,
+    start: streamStartN(s),
+    label: streamLabel(s),
+    max: s.max,
+    concurrency: conc,
+    speed,
+  });
 });
 
 $('speedSeg').addEventListener('click', (e) => {
@@ -186,6 +215,7 @@ function renderMedia() {
   media.forEach((m) => {
     const item = document.createElement('div');
     item.className = 'media-item';
+    item.title = m.url; // full URL on hover, to tell candidates apart
 
     const info = document.createElement('div');
     info.className = 'media-info';
@@ -194,7 +224,8 @@ function renderMedia() {
     name.textContent = mediaLabel(m.url);
     const sub = document.createElement('span');
     sub.className = 'media-sub';
-    const type = (m.mime || '').split('/')[1] || 'video';
+    const ext = (m.url.split('?')[0].match(/\.([a-z0-9]{2,4})$/i) || [])[1];
+    const type = ext ? ext.toLowerCase() : (m.mime || '').split('/')[1] || 'video';
     sub.textContent = [formatSize(m.size), type].filter(Boolean).join(' · ');
     info.appendChild(name);
     info.appendChild(sub);
@@ -203,7 +234,7 @@ function renderMedia() {
     btn.className = 'media-dl';
     btn.textContent = 'Download';
     btn.addEventListener('click', () => {
-      startJob({ kind: 'file', url: m.url, label: mediaLabel(m.url), mime: m.mime });
+      startDownload({ kind: 'file', url: m.url, label: mediaLabel(m.url), mime: m.mime });
     });
 
     item.appendChild(info);
@@ -212,6 +243,115 @@ function renderMedia() {
   });
 }
 
+/* ---------- in-popup view onto the background download ---------- */
+
+const SCAN_IDS = ['status', 'streamWrap', 'mediaWrap', 'hint', 'lockdown'];
+let scanSnapshot = null; // remembers which scan sections were visible
+let stateSubscribed = false;
+let lastLogLen = -1;
+
+function enterProgressView() {
+  if (!scanSnapshot) {
+    scanSnapshot = {};
+    SCAN_IDS.forEach((id) => { scanSnapshot[id] = $(id).classList.contains('hidden'); });
+  }
+  SCAN_IDS.forEach((id) => $(id).classList.add('hidden'));
+  $('progressView').classList.remove('hidden');
+}
+
+// "Back" just returns to the scan list — the download (if any) keeps running in
+// the background; reopening the popup will show it again while it's in flight.
+function showScanView() {
+  $('progressView').classList.add('hidden');
+  if (scanSnapshot) SCAN_IDS.forEach((id) => $(id).classList.toggle('hidden', scanSnapshot[id]));
+}
+
+function subscribeState() {
+  if (stateSubscribed) return;
+  stateSubscribed = true;
+  api.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'session' || !changes[STATE_KEY]) return;
+    renderState(changes[STATE_KEY].newValue);
+  });
+}
+
+function renderState(s) {
+  if (!s) return;
+  enterProgressView();
+
+  $('dlTitle').textContent = s.title || 'Downloading…';
+  $('dlLabel').textContent = s.label || '';
+  $('barFill').style.width = (s.pct || 0) + '%';
+  $('barFill').classList.toggle('done', !!s.done);
+  $('stat').textContent = s.stat || '';
+  $('dlNote').textContent = s.note || '';
+
+  $('cancelBtn').classList.toggle('hidden', !s.canStop);
+
+  const cv = s.convert || {};
+  const cbtn = $('convertBtn');
+  cbtn.classList.toggle('hidden', !cv.available);
+  if (cv.state === 'running') {
+    cbtn.disabled = true;
+    cbtn.textContent = 'Converting…';
+  } else if (cv.state === 'done') {
+    cbtn.disabled = true;
+    cbtn.textContent = 'MP4 saved ✓';
+  } else {
+    cbtn.disabled = false;
+    cbtn.textContent = 'Convert to MP4';
+  }
+  $('convStat').textContent = cv.status || '';
+  $('convStat').style.color = cv.state === 'error' ? 'var(--danger)' : 'var(--muted)';
+
+  const lines = s.log || [];
+  if (lines.length !== lastLogLen) {
+    const el = $('log');
+    el.innerHTML = '';
+    lines.forEach((line) => {
+      const d = document.createElement('div');
+      d.textContent = line;
+      el.appendChild(d);
+    });
+    el.scrollTop = el.scrollHeight;
+    lastLogLen = lines.length;
+  }
+}
+
+// Kick off a download in the background and switch to the live progress view.
+function startDownload(job) {
+  subscribeState();
+  enterProgressView();
+  $('dlTitle').textContent = 'Starting…';
+  $('dlLabel').textContent = job.label || '';
+  $('barFill').style.width = '0%';
+  $('barFill').classList.remove('done');
+  $('stat').textContent = '';
+  $('dlNote').textContent = 'You can close this popup — the download keeps running in the background.';
+  $('cancelBtn').classList.remove('hidden');
+  $('cancelBtn').textContent = 'Stop & save what we have';
+  $('convertBtn').classList.add('hidden');
+  $('convStat').textContent = '';
+  $('log').innerHTML = '';
+  lastLogLen = -1;
+  api.runtime.sendMessage({ type: 'avd:start', job }).catch(() => {});
+}
+
+$('cancelBtn').addEventListener('click', () => {
+  $('cancelBtn').textContent = 'Stopping…';
+  api.runtime.sendMessage({ type: 'avd:stop' }).catch(() => {});
+});
+
+$('convertBtn').addEventListener('click', () => {
+  const btn = $('convertBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.textContent = 'Converting…';
+  api.runtime.sendMessage({ type: 'avd:convert' }).catch(() => {});
+});
+
+$('backBtn').addEventListener('click', showScanView);
+
 /* ---------- init ---------- */
 
 function showNone() {
@@ -219,22 +359,15 @@ function showNone() {
   $('hint').classList.remove('hidden');
 }
 
-async function init() {
-  const tabs = await api.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs && tabs[0];
-  if (!tab) { showNone(); return; }
-
-  // Sites we can't support get a clear red lockdown view instead of an empty scan.
-  const blocked = matchUnsupported(hostnameOf(tab.url || ''));
-  if (blocked) { showLockdown(blocked); return; }
-
+async function populateScan(tab) {
   let resp = null;
   try {
     resp = await api.runtime.sendMessage({ type: 'getStreams', tabId: tab.id });
   } catch (e) {
     resp = null;
   }
-  streams = (resp && resp.streams) || [];
+  // Ignore malformed entries (e.g. stale data from an older version).
+  streams = ((resp && resp.streams) || []).filter((s) => s && typeof s.pre === 'string');
   media = (resp && resp.media) || [];
 
   if (streams.length === 0 && media.length === 0) { showNone(); return; }
@@ -254,6 +387,38 @@ async function init() {
     await runRandomTest();
   }
   renderMedia();
+}
+
+async function init() {
+  // A download started earlier may still be running (the popup was closed and
+  // reopened). Grab its state so we can show it live.
+  let activeState = null;
+  try {
+    const st = await api.storage.session.get(STATE_KEY);
+    activeState = st && st[STATE_KEY];
+  } catch (e) {
+    activeState = null;
+  }
+
+  const tabs = await api.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs && tabs[0];
+
+  // Build the scan view first so "Back" from a running download has a list to
+  // return to.
+  const blocked = tab ? matchUnsupported(hostnameOf(tab.url || '')) : null;
+  if (blocked) {
+    showLockdown(blocked);
+  } else if (!tab) {
+    showNone();
+  } else {
+    await populateScan(tab);
+  }
+
+  // If a job is in flight, overlay the live progress view on top of the scan.
+  if (activeState && (activeState.phase === 'running' || activeState.phase === 'starting')) {
+    subscribeState();
+    renderState(activeState);
+  }
 }
 
 init();

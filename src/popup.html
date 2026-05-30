@@ -26,9 +26,9 @@
       <p id="lockReason" class="lock-reason"></p>
     </section>
 
-    <!-- HLS segment streams (seg-N) -->
+    <!-- Numbered segment streams (seg-N, chunk-N, NNNN.ts, …) -->
     <section id="streamWrap" class="hidden">
-      <label for="streamSel">Detected video (HLS segments)</label>
+      <label for="streamSel">Segment streams — pick one</label>
       <select id="streamSel"></select>
       <div id="meta" class="meta"></div>
 
@@ -55,6 +55,29 @@
     <p id="hint" class="hint hidden">
       Open or play a video on this page, wait a moment, then reopen this popup.
     </p>
+
+    <!-- Live view onto the background download (runs even if this popup closes) -->
+    <section id="progressView" class="progress hidden">
+      <button id="backBtn" class="back" type="button">&lsaquo; Back</button>
+      <div id="dlTitle" class="dl-title">Preparing download&hellip;</div>
+      <div id="dlLabel" class="dl-label"></div>
+
+      <div class="bar"><div id="barFill" class="barFill"></div></div>
+      <div id="stat" class="stat"></div>
+
+      <p id="dlNote" class="dl-note">
+        You can close this popup — the download keeps running in the background.
+      </p>
+
+      <div class="actions">
+        <button id="cancelBtn" class="danger">Stop &amp; save what we have</button>
+        <button id="convertBtn" class="convert hidden">Convert to MP4</button>
+      </div>
+
+      <div id="convStat" class="stat"></div>
+
+      <div id="log" class="log" aria-live="polite"></div>
+    </section>
   </main>
 
   <script src="popup.js"></script>
