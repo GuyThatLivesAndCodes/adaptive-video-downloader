@@ -6,7 +6,6 @@
 // after this popup closes. The popup sends commands through the background and
 // renders progress from storage.session ('avd:state').
 const api = globalThis.browser ?? globalThis.chrome;
-const SEG_RE = /seg-(\d+)/;
 const $ = (id) => document.getElementById(id);
 const STATE_KEY = 'avd:state';
 
@@ -62,16 +61,37 @@ function showLockdown(site) {
   $('lockdown').classList.remove('hidden');
 }
 
-function buildSegUrl(template, n) {
-  return template.replace(SEG_RE, 'seg-' + n);
+// A segment URL = pre + <index number> + post (post carries the signed token).
+function segUrl(s, n) {
+  const num = s.pad > 0 ? String(n).padStart(s.pad, '0') : String(n);
+  return s.pre + num + s.post;
 }
 
-function labelFor(url) {
+// First index to try: 0 only if the stream was seen starting at 0, else 1.
+function streamStartN(s) {
+  return s.min === 0 ? 0 : 1;
+}
+
+// Display form of the family, e.g. https://cdn/abc/720p/seg-#.ts (token-free).
+function streamFamily(s) {
+  return (s.pre + '#' + s.post).split('?')[0];
+}
+
+function pathTail(u) {
   try {
-    const u = new URL(url);
+    const p = new URL(u).pathname.split('/').filter(Boolean);
+    return p.slice(-2).join('/') || u;
+  } catch (e) {
+    return u;
+  }
+}
+
+// A short, stable name for the saved file — the directory holding the segments.
+function streamLabel(s) {
+  try {
+    const u = new URL(streamFamily(s));
     const parts = u.pathname.split('/').filter(Boolean);
-    const i = parts.findIndex((p) => SEG_RE.test(p));
-    let name = i > 0 ? parts[i - 1] : parts[i] || u.hostname;
+    let name = parts.length >= 2 ? parts[parts.length - 2] : parts[0] || u.hostname;
     name = decodeURIComponent(name);
     if (name.length > 40) name = name.slice(0, 38) + '…';
     return name || u.hostname;
@@ -107,7 +127,7 @@ function current() {
 
 function updateMeta() {
   const s = current();
-  $('meta').textContent = `${s.count} segment request(s) seen · highest seg-${s.max}`;
+  $('meta').textContent = `${s.count} request(s) · #${s.min}–${s.max} · ${pathTail(streamFamily(s))}`;
 }
 
 function activeConcurrency() {
@@ -129,7 +149,9 @@ function renderStreams() {
   streams.forEach((s, i) => {
     const o = document.createElement('option');
     o.value = String(i);
-    o.textContent = labelFor(s.url);
+    const ext = s.ext ? '.' + s.ext : '';
+    o.textContent = `${streamLabel(s)}${ext} · ${s.count}× · up to #${s.max}`;
+    o.title = streamFamily(s);
     sel.appendChild(o);
   });
   sel.addEventListener('change', () => { updateMeta(); runRandomTest(); });
@@ -138,33 +160,44 @@ function renderStreams() {
 
 async function runRandomTest() {
   const s = current();
-  const upper = Math.max(s.max, 2);
-  const n = 1 + Math.floor(Math.random() * upper); // arbitrary segment within the stream
-  const url = buildSegUrl(s.url, n);
+  const start = streamStartN(s);
+  const upper = Math.max(s.max, start + 1);
+  const n = start + Math.floor(Math.random() * (upper - start + 1)); // arbitrary index in range
+  const url = segUrl(s, n);
   const el = $('testResult');
   el.className = 'test';
   el.classList.remove('hidden');
-  el.textContent = `Testing a random segment (seg-${n})…`;
+  el.textContent = `Testing a random segment (#${n})…`;
   try {
     const res = await fetch(url, { cache: 'no-store' });
     if (res.body && res.body.cancel) res.body.cancel().catch(() => {});
     if (res.ok) {
       el.classList.add('ok');
-      el.textContent = `Server answered random seg-${n} (HTTP ${res.status}). Ready to download.`;
+      el.textContent = `Server answered random #${n} (HTTP ${res.status}). Ready to download.`;
     } else {
       el.classList.add('warn');
-      el.textContent = `Random seg-${n} returned HTTP ${res.status}. You can still try the download.`;
+      el.textContent = `Random #${n} returned HTTP ${res.status}. You can still try the download.`;
     }
   } catch (e) {
     el.classList.add('warn');
-    el.textContent = `Random seg-${n} request failed (${e.message || 'network error'}). You can still try the download.`;
+    el.textContent = `Random #${n} request failed (${e.message || 'network error'}). You can still try the download.`;
   }
 }
 
 $('downloadBtn').addEventListener('click', () => {
   const s = current();
   const { conc, speed } = activeConcurrency();
-  startDownload({ kind: 'hls', template: s.url, label: labelFor(s.url), max: s.max, concurrency: conc, speed });
+  startDownload({
+    kind: 'hls',
+    pre: s.pre,
+    post: s.post,
+    pad: s.pad,
+    start: streamStartN(s),
+    label: streamLabel(s),
+    max: s.max,
+    concurrency: conc,
+    speed,
+  });
 });
 
 $('speedSeg').addEventListener('click', (e) => {
@@ -182,6 +215,7 @@ function renderMedia() {
   media.forEach((m) => {
     const item = document.createElement('div');
     item.className = 'media-item';
+    item.title = m.url; // full URL on hover, to tell candidates apart
 
     const info = document.createElement('div');
     info.className = 'media-info';
@@ -190,7 +224,8 @@ function renderMedia() {
     name.textContent = mediaLabel(m.url);
     const sub = document.createElement('span');
     sub.className = 'media-sub';
-    const type = (m.mime || '').split('/')[1] || 'video';
+    const ext = (m.url.split('?')[0].match(/\.([a-z0-9]{2,4})$/i) || [])[1];
+    const type = ext ? ext.toLowerCase() : (m.mime || '').split('/')[1] || 'video';
     sub.textContent = [formatSize(m.size), type].filter(Boolean).join(' · ');
     info.appendChild(name);
     info.appendChild(sub);

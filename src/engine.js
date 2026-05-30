@@ -14,7 +14,6 @@
 // The host drives it by calling AVD_Engine.handleCommand({ seq, action, job }).
 
 (function () {
-  const SEG_RE = /seg-(\d+)/;
   const MAX_SEG = 3000; // hard ceiling per the spec
   const DEFAULT_CONCURRENCY = 6;
   const RETRIES = 2; // extra attempts after the first → 3 tries total
@@ -22,7 +21,10 @@
 
   // ---- per-job state ----
   let job = null;
-  let template = null;
+  let segPre = ''; // segment URL = segPre + <number> + segPost
+  let segPost = '';
+  let segPad = 0; // zero-pad width for the index (0 = none)
+  let startN = 1; // first segment index to try
   let concurrency = DEFAULT_CONCURRENCY;
   let cancelled = false;
   let nextN = 1;
@@ -103,7 +105,8 @@
     );
   }
   function buildSegUrl(n) {
-    return template.replace(SEG_RE, 'seg-' + n);
+    const num = segPad > 0 ? String(n).padStart(segPad, '0') : String(n);
+    return segPre + num + segPost;
   }
 
   async function save(blob, filename) {
@@ -153,11 +156,11 @@
 
       if (buf === null) {
         failedAt = Math.min(failedAt, n);
-        log(`seg-${n}: no response after ${RETRIES + 1} attempts → treating as end of video.`);
+        log(`segment #${n}: no response after ${RETRIES + 1} attempts → treating as end of video.`);
       } else {
         data[n] = new Uint8Array(buf);
         fetchedCount++;
-        S.stat = `${fetchedCount} segment(s) downloaded · scanning seg-${highestTried}`;
+        S.stat = `${fetchedCount} segment(s) downloaded · scanning #${highestTried}`;
         const estimate = Math.max((job.max || 0) * 1.5, 60);
         S.pct = Math.min(96, Math.round((highestTried / estimate) * 100));
         emit();
@@ -166,14 +169,18 @@
   }
 
   async function runHls() {
-    template = job.template;
+    segPre = job.pre || '';
+    segPost = job.post || '';
+    segPad = job.pad || 0;
+    startN = job.start === 0 ? 0 : 1;
+    nextN = startN;
     concurrency = Math.max(1, Math.min(64, job.concurrency || DEFAULT_CONCURRENCY));
 
     S.title = 'Downloading video…';
     S.label = job.label || 'video';
     S.canStop = true;
-    log('Source template: ' + template.replace(SEG_RE, 'seg-#'));
-    log(`Fetching seg-1 … seg-${MAX_SEG} (stops at the first that fails ${RETRIES + 1} times).`);
+    log('Segment template: ' + segPre + '#' + segPost.split('?')[0]);
+    log(`Fetching #${startN} … #${MAX_SEG} (stops at the first that fails ${RETRIES + 1} times).`);
     log(`Up to ${concurrency} segments at once${job.speed ? ' (' + job.speed + ' mode)' : ''}.`);
     emit(true);
 
@@ -185,9 +192,9 @@
   }
 
   async function finalizeHls(startTime) {
-    // Contiguous run from seg-1 guarantees a playable, gap-free file.
+    // Contiguous run from the first segment guarantees a playable, gap-free file.
     const parts = [];
-    let n = 1;
+    let n = startN;
     while (n <= MAX_SEG && data[n]) {
       parts.push(data[n]);
       n++;

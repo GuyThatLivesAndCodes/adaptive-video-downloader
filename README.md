@@ -17,19 +17,24 @@ It detects video as you browse using two methods:
 ## How it works
 
 1. **Logging** — once installed, the background script watches network traffic
-   on every tab (`webRequest`). Each segment URL containing `seg-<number>` is
-   recorded per tab. Only the freshest URL per stream is kept (the signed token
-   is shared across all segments of a video), along with the highest segment
-   number seen.
-2. **Scan** — click the toolbar icon. The popup asks the background script for
-   the segment URLs captured on the current tab and lists each detected video.
+   on every tab (`webRequest`) and records *every* video-ish request (`.ts`,
+   `.mp4`, `.m4s`, `.webm`, …, plus anything served with a `video/*`
+   Content-Type). Numbered segments are recognised by an incrementing index —
+   `seg-12`, `segment_12`, `chunk-12`, `frag12`, or a bare `00012.ts` — and URLs
+   that differ **only** by that index converge into a single template (other
+   numbers, like `720p`, stay, so resolutions remain separate). The freshest
+   signed token is kept, along with the lowest/highest index seen. Everything
+   else is listed as a direct file.
+2. **Scan** — click the toolbar icon. The popup lists every captured candidate:
+   segment streams in a dropdown (pick one) and direct files below, so if the
+   first guess is wrong you can choose another. Hover any entry for its full URL.
 3. **Random test** — the popup immediately fires one request at a *random*
-   segment number on the captured URL (e.g. `seg-21` → `seg-1847`). Because the
-   token is not tied to a single segment, a successful response confirms the
-   stream can be fetched on demand.
+   index on the selected stream (e.g. `#21` → `#1847`). Because the token is not
+   tied to a single segment, a successful response confirms the stream can be
+   fetched on demand.
 4. **Download** — press **Download video**. The popup switches to a live
    progress view (no separate tab opens) while the **download runs in the
-   background** and fetches `seg-1 … seg-3000`:
+   background**, iterating the index from the start up to a 3000 cap:
    - each segment is tried up to **3 times** (1 try + 2 retries);
    - the **first segment that still fails is treated as the end of the video**;
    - all segments before it are concatenated (MPEG-TS segments merge by simple

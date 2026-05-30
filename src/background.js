@@ -1,15 +1,17 @@
 // Adaptive Video Downloader — background
 //
-// Observes network traffic per tab and records two kinds of downloadable media:
-//   1. HLS "seg-N" segment streams (iterated by number) — the original method.
-//   2. Direct video files (mp4/webm/mov/…) detected by Content-Type or file
-//      extension — covers sites like TikTok and many Instagram videos that
-//      serve one progressive file instead of numbered HLS segments.
+// Observes network traffic per tab and logs every video-ish request so the
+// popup can show the user all candidates to pick from. Two kinds are recorded:
+//   1. Numbered segment streams (HLS) — any URL with an incrementing index
+//      (seg-12, segment_12, chunk12, frag-12, 00012.ts, …). URLs that differ
+//      only by that index converge into one downloadable template.
+//   2. Direct video files (mp4/webm/mov/ts/…) detected by file extension or
+//      Content-Type — one progressive file, downloaded whole.
 
 const api = globalThis.browser ?? globalThis.chrome;
 
-const SEG_RE = /seg-(\d+)/;
-const MEDIA_EXT_RE = /\.(mp4|m4v|webm|mov|ogv)(\?|$)/i;
+// Extensions we treat as downloadable video.
+const VIDEO_EXT_RE = /\.(ts|mp4|m4v|m4s|webm|mov|ogv)(\?|#|$)/i;
 const STREAMS_KEY = 'avd:streams'; // { [tabId]: { [streamKey]: {url,max,min,count} } }
 const MEDIA_KEY = 'avd:media'; //    { [tabId]: [ {url,mime,size,ts} ] }
 const SELF_ORIGIN = api.runtime.getURL('').replace(/\/$/, '');
@@ -127,52 +129,107 @@ function isSelf(details) {
   return !!(origin && SELF_ORIGIN && origin.startsWith(SELF_ORIGIN));
 }
 
-function streamKeyOf(url) {
-  return url.split('?')[0].replace(SEG_RE, 'seg-#');
+// Segment-specific tokens followed by the index, plus a fallback for a bare
+// trailing number on transport-stream/fMP4 segments (00012.ts, media_1.ts).
+// Tokens are kept tight (seg/segment/chunk/frag/fragment) so generic words that
+// appear as directories (media, part) don't get mistaken for an index.
+const SEG_TOKEN_RE = /(seg(?:ment)?|chunk|frag(?:ment)?)[-_]?(\d+)/gi;
+const TS_TRAILING_RE = /(\d+)(\.(?:ts|m4s))$/i;
+
+// Split a URL around its segment index so it can be rebuilt for any number.
+// Returns { pre, post, n, pad } or null when the URL isn't a numbered segment.
+// The index is searched only within the PATH (never the host), and `post` keeps
+// the query string so the (freshest) signed token rides along.
+function findSegIndex(fullUrl) {
+  let u;
+  try { u = new URL(fullUrl); } catch (e) { return null; }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  const path = u.pathname;
+  const query = u.search || '';
+
+  let start = -1;
+  let len = 0;
+  SEG_TOKEN_RE.lastIndex = 0;
+  let m;
+  while ((m = SEG_TOKEN_RE.exec(path))) {
+    len = m[2].length; // last token wins (closest to the filename)
+    start = m.index + m[0].length - len;
+  }
+  if (start < 0) {
+    const t = TS_TRAILING_RE.exec(path);
+    if (t) { start = t.index; len = t[1].length; }
+  }
+  if (start < 0) return null;
+
+  const digits = path.slice(start, start + len);
+  return {
+    pre: u.origin + path.slice(0, start),
+    post: path.slice(start + len) + query,
+    n: parseInt(digits, 10),
+    pad: digits[0] === '0' ? len : 0, // preserve zero-padding (00012 → width 5)
+  };
 }
 
-function recordSeg(tabId, url) {
+// Token-independent grouping: path structure with the index blanked and the
+// query dropped. Other numbers (e.g. 720p) stay, so resolutions stay separate.
+function familyKeyOf(seg) {
+  return seg.pre + '#' + seg.post.split('?')[0];
+}
+
+function extOf(url) {
+  const m = /\.([a-z0-9]{2,4})(?:\?|#|$)/i.exec(url.split('#')[0]);
+  return m ? m[1].toLowerCase() : '';
+}
+
+function recordSeg(tabId, url, seg) {
   if (tabId == null || tabId < 0) return;
-  const m = url.match(SEG_RE);
-  if (!m) return;
-  const n = parseInt(m[1], 10);
-  const key = streamKeyOf(url);
+  if (!seg) seg = findSegIndex(url);
+  if (!seg) return;
+  const key = familyKeyOf(seg);
   const tabKey = String(tabId);
   const streams = (streamStore[tabKey] = streamStore[tabKey] || {});
-  const entry = (streams[key] = streams[key] || { url, max: n, min: n, count: 0 });
-  entry.url = url; // keep the freshest token
-  entry.max = Math.max(entry.max, n);
-  entry.min = Math.min(entry.min, n);
+  const entry =
+    streams[key] ||
+    (streams[key] = { pre: seg.pre, post: seg.post, pad: seg.pad, min: seg.n, max: seg.n, count: 0, ext: extOf(url) });
+  entry.pre = seg.pre; // refresh to the freshest token
+  entry.post = seg.post;
+  entry.pad = seg.pad;
+  entry.min = Math.min(entry.min, seg.n);
+  entry.max = Math.max(entry.max, seg.n);
   entry.count += 1;
   scheduleSave();
 }
 
-// video/* except the transport-stream segments handled by the seg path.
+function isVideoFileUrl(url) {
+  return VIDEO_EXT_RE.test(url.split('#')[0]);
+}
+
 function mediaMimeKind(mime) {
   if (!mime) return null;
   const m = mime.split(';')[0].trim().toLowerCase();
-  if (m === 'video/mp2t') return null;
   if (!m.startsWith('video/')) return null;
   return 'file';
 }
 
 function recordMedia(tabId, url, mime, size) {
   if (tabId == null || tabId < 0) return;
-  if (url.indexOf('seg-') !== -1) return; // belongs to the HLS seg path
   if (/^(data|blob):/i.test(url)) return;
-  // YouTube (googlevideo) is throttled, DASH, separate audio/video — it can't be
-  // saved as one progressive file, so don't list it as a downloadable file.
+  if (findSegIndex(url)) return; // numbered segment → handled as a stream
+  // YouTube (googlevideo) is throttled DASH with separate audio/video — it can't
+  // be saved as one progressive file, so don't list it as a downloadable file.
   if (/googlevideo\.com/i.test(url)) return;
   const tabKey = String(tabId);
   const list = (mediaStore[tabKey] = mediaStore[tabKey] || []);
-  const existing = list.find((x) => x.url === url);
+  const bare = url.split('?')[0];
+  const existing = list.find((x) => x.url.split('?')[0] === bare);
   if (existing) {
+    existing.url = url; // freshest token
     if (size && size > (existing.size || 0)) existing.size = size;
     if (mime && !existing.mime) existing.mime = mime;
     return;
   }
   list.push({ url, mime: mime || '', size: size || 0, ts: Date.now() });
-  while (list.length > 20) list.shift();
+  while (list.length > 30) list.shift();
   scheduleSave();
 }
 
@@ -189,18 +246,21 @@ api.webRequest.onBeforeRequest.addListener(
     ready.then(() => {
       if (isSelf(details)) return;
       if (details.type === 'main_frame') { resetTab(details.tabId); return; }
-      if (details.url.indexOf('seg-') !== -1) recordSeg(details.tabId, details.url);
-      else if (MEDIA_EXT_RE.test(details.url.split('#')[0])) recordMedia(details.tabId, details.url, '', 0);
+      const seg = findSegIndex(details.url);
+      if (seg) recordSeg(details.tabId, details.url, seg);
+      else if (isVideoFileUrl(details.url)) recordMedia(details.tabId, details.url, '', 0);
     });
   },
   { urls: ['<all_urls>'] }
 );
 
-// Catch extensionless media (TikTok/Instagram CDN URLs) by Content-Type.
+// Headers pass: catch extensionless media by Content-Type, and enrich files
+// already seen with their real type/size. (Numbered segments are handled above.)
 api.webRequest.onHeadersReceived.addListener(
   (details) => {
     ready.then(() => {
       if (isSelf(details)) return;
+      if (findSegIndex(details.url)) return; // already recorded as a segment stream
       const headers = details.responseHeaders || [];
       let mime = '';
       let size = 0;
@@ -211,7 +271,9 @@ api.webRequest.onHeadersReceived.addListener(
         else if (name === 'content-length') { if (!size) size = parseInt(val, 10) || 0; }
         else if (name === 'content-range') { const mm = /\/(\d+)\s*$/.exec(val); if (mm) size = parseInt(mm[1], 10) || size; }
       }
-      if (mediaMimeKind(mime) === 'file') recordMedia(details.tabId, details.url, mime, size);
+      if (mediaMimeKind(mime) === 'file' || isVideoFileUrl(details.url)) {
+        recordMedia(details.tabId, details.url, mime, size);
+      }
     });
   },
   { urls: ['<all_urls>'] },
@@ -279,7 +341,16 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         streams: Object.keys(streams).map((key) => {
           const v = streams[key];
-          return { key, url: v.url, max: v.max, min: v.min, count: v.count };
+          return {
+            key,
+            pre: v.pre,
+            post: v.post,
+            pad: v.pad || 0,
+            min: v.min,
+            max: v.max,
+            count: v.count,
+            ext: v.ext || '',
+          };
         }),
         media: mediaList.map((m) => ({ url: m.url, mime: m.mime, size: m.size })),
       });
