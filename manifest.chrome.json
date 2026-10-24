@@ -1,10 +1,24 @@
 {
   "manifest_version": 3,
   "name": "Adaptive Video Downloader",
-  "version": "1.0.0",
-  "description": "Detects adaptive (HLS) video segments on any page, then downloads and merges them into a single video file.",
-  "permissions": ["webRequest", "storage", "tabs", "offscreen", "downloads"],
-  "host_permissions": ["<all_urls>"],
+  "version": "2.0.0",
+  "description": "Download almost any video: HLS, DASH, segment streams and direct files \u2014 with Auto and Manual modes, a live queue and download history.",
+  "permissions": [
+    "webRequest",
+    "storage",
+    "unlimitedStorage",
+    "tabs",
+    "offscreen",
+    "downloads",
+    "downloads.open",
+    "notifications",
+    "contextMenus",
+    "scripting",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },

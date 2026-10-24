@@ -1,98 +1,96 @@
-# adaptive-video-downloader
+# Adaptive Video Downloader
 
-The most adaptive, easy-to-use video downloader that works on almost any site.
-With a slick UI and advanced innersystems, this plugin beats competitors at
-style and speed.
+Download almost any video on the web — adaptive HLS and DASH streams, raw
+numbered-segment streams, and plain video files — from one glassy, iOS-style
+popup. **Auto mode** picks the best source and quality and gets it done in one
+tap; **Manual mode** lets you control exactly how each video is downloaded.
+Every download lands in a searchable **History**.
 
-It detects video as you browse using two methods:
-
-- **Adaptive HLS `.ts` segments** (`seg-N`) — downloads every segment and merges
-  them into a single playable file.
-- **Direct progressive files** (`.mp4`/`.webm`/`.mov`, even without a file
-  extension) — detected by their `Content-Type`; covers TikTok and many
-  Instagram videos.
+Works in **Chrome / Edge** (Manifest V3) and **Firefox** (Manifest V2) from the
+same `src/`.
 
 ---
 
-## How it works
+## Features
 
-1. **Logging** — once installed, the background script watches network traffic
-   on every tab (`webRequest`) and records *every* video-ish request (`.ts`,
-   `.mp4`, `.m4s`, `.webm`, …, plus anything served with a `video/*`
-   Content-Type). Numbered segments are recognised by an incrementing index —
-   `seg-12`, `segment_12`, `chunk-12`, `frag12`, or a bare `00012.ts` — and URLs
-   that differ **only** by that index converge into a single template (other
-   numbers, like `720p`, stay, so resolutions remain separate). The freshest
-   signed token is kept, along with the lowest/highest index seen. Everything
-   else is listed as a direct file.
-2. **Scan** — click the toolbar icon. The popup lists every captured candidate:
-   segment streams in a dropdown (pick one) and direct files below, so if the
-   first guess is wrong you can choose another. Hover any entry for its full URL.
-3. **Random test** — the popup immediately fires one request at a *random*
-   index on the selected stream (e.g. `#21` → `#1847`). Because the token is not
-   tied to a single segment, a successful response confirms the stream can be
-   fetched on demand.
-4. **Download** — press **Download video**. The popup switches to a live
-   progress view (no separate tab opens) while the **download runs in the
-   background**, iterating the index from the start up to a 3000 cap:
-   - each segment is tried up to **3 times** (1 try + 2 retries);
-   - the **first segment that still fails is treated as the end of the video**;
-   - all segments before it are concatenated (MPEG-TS segments merge by simple
-     byte concatenation) into one `.ts` file and saved to your Downloads.
+### Two modes
 
-   The fetching and merging happen in a persistent context — an **offscreen
-   document** on Chrome, the **background page** on Firefox — so **you can close
-   the popup (or click away) and the download keeps going** and still saves.
-   Reopen the popup any time to watch progress. A **Stop & save** button keeps a
-   partial video, and **‹ Back** returns to the scan list while the download
-   continues. The **Download speed** selector (Normal / Fast / Hyper =
-   6 / 12 / 24 segments in parallel) trades politeness for speed on CDNs that
-   allow it; the choice is remembered.
+| | **Auto** | **Manual** |
+|---|---|---|
+| Source | Ranks every detected source and picks the main video (manifests over raw segments, duration-matched to the `<video>` on the page, ads/previews de-ranked) | Pick any detected source, or paste your own link |
+| Quality | Highest available | Any variant, plus any alternate audio track |
+| Output | MP4 (lossless remux) | Auto · MP4 · Original stream · Audio only (M4A / MP3) |
+| Range | Whole video | Trim by time (`1:30`–`4:05`) or by segment number |
+| Speed | Adaptive connection count | Adaptive or fixed 1–32 parallel requests, retries, timeout, polite delay |
+| Errors | Skips unrecoverable segments | Skip them, or stop at the first gap |
+| Headers | Page sent as Referer, cookies on | Custom Referer, cookies on/off |
+| Live | Records until you press Stop | Record live, optional time limit |
 
-   For a **direct video file**, the popup lists it under *Direct video files* —
-   click **Download** and it's fetched in one request (with a progress bar) and
-   saved.
-5. **Convert to MP4 (optional)** — once the `.ts` is saved, press **Convert to
-   MP4**. The bundled [ffmpeg.wasm](https://github.com/ffmpegwasm/ffmpeg.wasm)
-   runs `ffmpeg -i input.ts -c copy -movflags +faststart output.mp4` — the exact
-   stream-copy remux you'd run on the command line. **No re-encoding**, so it's
-   fast and lossless, and because it's real ffmpeg it fixes timestamps and works
-   with any codec the stream uses (H.264, HEVC, AAC, AC-3, …), producing a clean
-   progressive MP4 that plays in browsers, VLC, QuickTime, and mobile players.
-   The ~32 MB ffmpeg core is initialised on first use (a few seconds) and freed
-   afterwards.
+### Source support
 
-### Example segment URLs
+- **HLS** (`.m3u8`) — master + variant playlists, separate audio renditions,
+  fMP4 (`EXT-X-MAP`) and MPEG-TS segments, byte-range segments, **AES-128**
+  clear-key encryption (decrypted with WebCrypto), and **live recording**.
+- **DASH** (`.mpd`) — `SegmentTemplate` (`$Number$` / `$Time$`, with or without
+  `SegmentTimeline`), `SegmentList`, and single-file `SegmentBase`; video and
+  audio are downloaded separately and muxed.
+- **Numbered segment streams** — URLs like `seg-12.ts`, `chunk_12`, `00012.ts`
+  are folded into one template; the engine scans forward and detects the end
+  (peeking ahead so a single missing segment isn't mistaken for the end).
+- **Direct files** (`.mp4`, `.webm`, `.mov`, … or anything served as `video/*`)
+  — split into 4 MB ranges and fetched in parallel when the server supports it,
+  otherwise streamed with automatic resume after dropped connections.
+- **Right-click** any `<video>` or video link → *Download with Adaptive*.
 
-```
-http://…cloudwindow-route.com/…/0bhusoiktttu_,h,n,l,.urlset/seg-21-f2-v1-a1.ts?t=…
-https://…cloudwindow-route.com/…/0bhusoiktttu_,h,n,l,.urlset/seg-22-f2-v1-a1.ts?t=…
-```
+DRM-protected streams (Widevine, FairPlay, PlayReady, SAMPLE-AES) are detected
+and refused — the extension never bypasses DRM. YouTube and the major DRM
+streaming services show a red “unavailable” view instead of a scan.
 
-Only the number right after `seg-` changes between segments, so the downloader
-rewrites it from `1` upward while keeping the rest of the URL (including the
-token) intact.
+### Reliability
+
+- **Adaptive concurrency (AIMD)** — starts polite, adds connections while the
+  CDN keeps up, halves on 429/503/timeouts.
+- **Retries with exponential backoff + jitter**, honouring `Retry-After`, plus
+  a slower second pass over anything that still failed.
+- **Referer/Origin rewriting** for the extension's own requests (DNR session
+  rule on Chrome, `onBeforeSendHeaders` on Firefox) — fixes most 403s from
+  hot-link-protected CDNs.
+- **Detection fallback** — the popup also reads the page's own resource log, so
+  videos that started before the extension was listening (fresh install,
+  update, restored tabs) are still found.
+- **Background engine** — downloads run in an offscreen document (Chrome) or
+  the background page (Firefox), so closing the popup never stops them. A
+  **queue** runs jobs one after another; each can be paused, resumed, stopped
+  (keeps what's downloaded) or discarded.
+- **Real ffmpeg** (ffmpeg.wasm) for remux/mux/extract — stream copy only, no
+  re-encoding; falls back to MKV or separate files rather than failing.
+
+### History
+
+Searchable list grouped by day, with filters (Completed / Partial / Failed),
+thumbnails (a frame grabbed from the playing video, or its poster), quality,
+format, size and duration. Each entry can **Open** the file, **Show** it in its
+folder, jump back to the **page** (also the way to retry a failed one), copy
+the page link, or be removed. Detects files that were moved or deleted.
+
+### Settings
+
+Default mode, default format, filename template (`{title} {site} {quality}
+{date} {time}`), Downloads subfolder, “ask where to save”, network defaults,
+theme (System / Light / Dark), accent colour, completion notifications, and the
+video-count badge on the toolbar icon.
 
 ---
 
 ## Install (unpacked / temporary)
 
-Build the packages first (see below), or load straight from source.
+Build first (below), then:
 
-**Firefox** (Manifest V2)
-1. `about:debugging#/runtime/this-firefox`
-2. **Load Temporary Add-on…** → pick `manifest.firefox.json` (or any file in a
-   built `dist/firefox/` folder).
+**Chrome / Edge** — `chrome://extensions` → enable *Developer mode* → *Load
+unpacked* → select `dist/chrome/`.
 
-**Chrome / Edge** (Manifest V3)
-1. `chrome://extensions`, enable **Developer mode**.
-2. **Load unpacked** → select the built `dist/chrome/` folder.
-
-> Firefox uses Manifest V2 so that the `<all_urls>` host permission (needed to
-> observe network traffic) is granted at install time. Chrome uses Manifest V3.
-> Both share the exact same `src/` code.
-
----
+**Firefox** — `about:debugging#/runtime/this-firefox` → *Load Temporary
+Add-on…* → pick any file in `dist/firefox/`.
 
 ## Build
 
@@ -100,21 +98,10 @@ Build the packages first (see below), or load straight from source.
 npm run build      # or: bash build.sh
 ```
 
-This writes to `dist/`:
-
-- `dist/chrome/` and `dist/firefox/` — unpacked extensions
-- `dist/artifacts/adaptive-video-downloader-chrome-v<version>.zip`
-- `dist/artifacts/adaptive-video-downloader-firefox-v<version>.zip`
-- `dist/artifacts/adaptive-video-downloader-firefox-v<version>.xpi`
-
-Icons are generated (no dependencies) with `npm run icons`.
-
-### Continuous builds
-
-`.github/workflows/build.yml` runs on **every push** (and on PRs /
-manual dispatch). It builds both packages and uploads them as workflow
-artifacts (`adaptive-video-downloader-chrome` and
-`-firefox`), downloadable from the run's **Summary** page.
+Writes `dist/chrome/`, `dist/firefox/` and zipped packages (plus a Firefox
+`.xpi`) to `dist/artifacts/`. `.github/workflows/build.yml` builds both on every
+push and uploads them as workflow artifacts. Icons are generated with
+`npm run icons` (no dependencies).
 
 ---
 
@@ -122,62 +109,35 @@ artifacts (`adaptive-video-downloader-chrome` and
 
 ```
 src/
-  background.js     network logging + per-tab segment store, and the download
-                    coordinator (offscreen lifecycle on Chrome, in-page engine
-                    on Firefox; routes commands + saves via the Downloads API)
-  engine.js         the download engine: segment worker pool, merge, direct-file
-                    streaming, ffmpeg MP4 remux — runs in a persistent context
-  offscreen.html/.js  Chrome (MV3) host that runs engine.js out of view so the
-                    download survives the popup closing
-  popup.html/.css/.js   scan streams + direct files, speed selector, test, and a
-                    live progress view onto the background download
-  vendor/ffmpeg/    ffmpeg.wasm 0.12 — UMD wrapper + worker + single-threaded
-                    core (ffmpeg-core.wasm, ~32 MB); runs `-c copy` for MP4
-                    conversion. Loaded on demand by the engine.
-  icons/            generated PNGs
-manifest.chrome.json   Manifest V3 (Chrome) — adds "offscreen" + "downloads"
-manifest.firefox.json  Manifest V2 (Firefox) — loads engine.js in the bg page
-tools/make-icons.mjs   PNG icon generator
+  shared.js        settings defaults, storage keys, blocked sites, formatting
+                   and filename helpers (loaded by every context)
+  manifest.js      HLS + DASH parsers, quality/audio description for the popup,
+                   and resolution into concrete download tracks for the engine
+  engine.js        the download engine: job queue, AIMD limiter, retries,
+                   AES-128, init segments, live recording, ranged file download,
+                   ffmpeg.wasm remux/mux/extract, saving, history records
+  background.js    network detection (manifests, segment templates, files),
+                   playlist inspection, badge, engine routing, history,
+                   Referer rewriting, notifications, context menu
+  offscreen.html/.js   Chrome host page for the engine (survives popup close)
+  popup.html/.css/.js  the glass UI: Auto / Manual, active downloads + queue,
+                   History, Settings
+  vendor/ffmpeg/   ffmpeg.wasm 0.12 (single-threaded core, loaded on demand)
+  icons/           generated PNGs
+manifest.chrome.json   Manifest V3
+manifest.firefox.json  Manifest V2 (engine runs in the background page)
+tools/make-icons.mjs   icon generator
 build.sh               packages both browsers
 ```
 
----
-
-## Site support
-
-- **Works well:** generic HLS (`seg-N`) sites, TikTok, and many Instagram videos
-  (progressive MP4).
-- **Deliberately blocked (red lockdown view):** when the active tab is on a site
-  the extension can't help with, the popup turns red and explains why instead of
-  showing an empty scan. This covers:
-  - **YouTube** — throttled DASH with separate audio/video that needs its
-    obfuscated player code to download, and against its Terms of Service.
-    (`googlevideo.com` requests are also ignored so they're never offered as
-    broken downloads.)
-  - **DRM services** (Netflix, Disney+, Hulu, Max, Prime Video, Apple TV+,
-    Spotify) — the content is encrypted; it can't be downloaded and the
-    extension won't attempt to bypass DRM.
-
-  The blocked list lives in `UNSUPPORTED_SITES` in `src/popup.js`.
-- Some sites that require the page's cookies/`Referer` on the media URL may
-  reject the extension's direct fetch.
-
 ## Notes & limitations
 
-- The download runs in the background and saves itself via the **Downloads API**
-  (so it lands in your default downloads folder without a Save dialog). It keeps
-  going if you close the popup; it only stops if you press **Stop**, start a
-  different download, or the browser shuts the extension down. One download runs
-  at a time — starting another replaces the current one.
-- Segments are merged in memory, so extremely long videos (toward the 3000-cap)
-  can use a lot of RAM. MP4 conversion additionally holds the input and output
-  in ffmpeg's in-memory filesystem alongside the ~32 MB core.
-- **MP4 conversion is a stream copy** (`-c copy`) — no transcoding, so it's
-  lossless and keeps whatever codec the source uses. The output is a standard
-  progressive MP4 with `+faststart`. (If a stream's codec genuinely can't sit in
-  an MP4 container, ffmpeg errors and the `.ts` remains saved.)
-- The bundled ffmpeg core is committed to the repo so the build works as-is. To
-  refresh it: `npm install` then `npm run vendor`.
-- Works for token-signed CDN segments that don't require the original page's
-  `Referer`/`Origin`.
-- This is a general media tool. Only download content you have the right to.
+- Media is assembled in memory (as Blobs, which browsers can page to disk).
+  In-browser MP4 conversion is limited to ~900 MB; larger downloads are saved
+  in their original container instead.
+- Live DASH isn't supported yet (live HLS is).
+- Sites that bind media URLs to the page session in other ways (signed cookies
+  on a different domain, per-request tokens) may still refuse the download.
+- To refresh the bundled ffmpeg core: `npm install` then `npm run vendor`.
+- This is a general-purpose media tool. Only download content you have the
+  right to.

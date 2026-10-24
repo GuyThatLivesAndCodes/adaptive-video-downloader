@@ -6,8 +6,9 @@
 </head>
 <body>
   <!-- Hidden, persistent worker page (Chrome MV3). Runs the download engine so
-       it survives the popup closing. ffmpeg.wasm is loaded on demand by
-       engine.js for MP4 conversion. -->
+       it survives the popup closing. ffmpeg.wasm is loaded on demand. -->
+  <script src="shared.js"></script>
+  <script src="manifest.js"></script>
   <script src="engine.js"></script>
   <script src="offscreen.js"></script>
 </body>

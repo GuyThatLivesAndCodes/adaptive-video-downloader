@@ -3,83 +3,330 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Adaptive Video Downloader</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <header>
-    <div class="logo" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3a1 1 0 0 1 1 1v8.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.42l2.3 2.3V4a1 1 0 0 1 1-1ZM5 18a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1Z"/></svg>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v5h-5"/></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><path d="M8.5 5v14M15.5 5v14" stroke-width="3"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="2.5" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+      <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+      <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></symbol>
+      <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9zM18.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+      <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M7.5 5v14M16.5 5v14M3 9.5h4.5M3 14.5h4.5M16.5 9.5H21M16.5 14.5H21"/></symbol>
+      <symbol id="i-stack" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5zM3 13l9 5 9-5"/></symbol>
+      <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6zM14 3v5h5"/></symbol>
+      <symbol id="i-wave" viewBox="0 0 24 24"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+      <symbol id="i-live" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/></symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.2v.3"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    </defs>
+  </svg>
+
+  <div class="ambient" aria-hidden="true"><i class="blob b1"></i><i class="blob b2"></i><i class="blob b3"></i></div>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="app-icon" aria-hidden="true"><svg><use href="#i-download"/></svg></div>
+      <div class="brand">
+        <h1 id="viewTitle">Adaptive</h1>
+        <div class="site-chip" id="siteChip"><img id="siteIcon" alt="" /><span id="siteName">—</span></div>
+      </div>
+      <button class="icon-btn glass" id="rescanBtn" type="button" title="Rescan this page" aria-label="Rescan this page"><svg><use href="#i-refresh"/></svg></button>
+    </header>
+
+    <div class="mode-wrap" id="modeWrap">
+      <div class="segmented" id="modeSeg" role="tablist" aria-label="Mode">
+        <span class="seg-thumb"></span>
+        <button type="button" data-value="auto" role="tab"><svg><use href="#i-sparkles"/></svg>Auto</button>
+        <button type="button" data-value="manual" role="tab"><svg><use href="#i-sliders"/></svg>Manual</button>
+      </div>
     </div>
-    <h1>Adaptive Video Downloader</h1>
-  </header>
 
-  <main>
-    <div id="status" class="status">Scanning network activity&hellip;</div>
+    <main class="scroller" id="scroller">
+      <!-- ============ DOWNLOAD ============ -->
+      <section class="view" id="view-download">
+        <div id="activeArea" class="active-area"></div>
 
-    <!-- Shown on sites we deliberately don't support (YouTube, DRM services) -->
-    <section id="lockdown" class="lockdown hidden">
-      <div class="lock-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5Zm3 8H9V7a3 3 0 0 1 6 0v3Z"/></svg>
-      </div>
-      <h2>Downloading not available</h2>
-      <p class="lock-site">Can't provide downloads from <span id="lockSite">this site</span>.</p>
-      <p id="lockReason" class="lock-reason"></p>
-    </section>
-
-    <!-- Numbered segment streams (seg-N, chunk-N, NNNN.ts, …) -->
-    <section id="streamWrap" class="hidden">
-      <label for="streamSel">Segment streams — pick one</label>
-      <select id="streamSel"></select>
-      <div id="meta" class="meta"></div>
-
-      <div id="testResult" class="test hidden"></div>
-
-      <div class="speed">
-        <span class="speed-label">Download speed</span>
-        <div class="seg" id="speedSeg" role="group" aria-label="Download speed">
-          <button type="button" data-speed="normal" data-conc="6">Normal</button>
-          <button type="button" data-speed="fast" data-conc="12">Fast</button>
-          <button type="button" data-speed="hyper" data-conc="24">Hyper</button>
+        <div id="lockdown" class="lockdown glass" hidden>
+          <div class="lock-badge"><svg><use href="#i-lock"/></svg></div>
+          <h2>Downloads unavailable</h2>
+          <p class="lock-site">Adaptive can't download from <b id="lockSite">this site</b>.</p>
+          <p class="lock-reason" id="lockReason"></p>
         </div>
-      </div>
 
-      <button id="downloadBtn" class="primary">Download video</button>
-    </section>
+        <div id="scanning" class="scanning">
+          <div class="spinner"></div>
+          <span>Looking for videos on this page…</span>
+        </div>
 
-    <!-- Direct progressive media files (TikTok, Instagram, …) -->
-    <section id="mediaWrap" class="hidden">
-      <label>Direct video files</label>
-      <div id="mediaList"></div>
-    </section>
+        <div id="emptyState" class="empty glass" hidden>
+          <div class="empty-orb"><svg><use href="#i-play"/></svg></div>
+          <h2>No video found yet</h2>
+          <p>Start playing the video for a few seconds — Adaptive picks it up automatically.</p>
+          <div class="empty-actions">
+            <button class="btn-tinted" id="emptyRescan" type="button"><svg><use href="#i-refresh"/></svg>Rescan</button>
+            <button class="btn-tinted" id="emptyPaste" type="button"><svg><use href="#i-link"/></svg>Paste a link</button>
+          </div>
+        </div>
 
-    <p id="hint" class="hint hidden">
-      Open or play a video on this page, wait a moment, then reopen this popup.
-    </p>
+        <!-- Auto: one best guess, one button -->
+        <div id="autoView" hidden>
+          <article class="hero glass" id="hero">
+            <div class="hero-media" id="heroMedia">
+              <div class="hero-ph" id="heroPh"><svg><use href="#i-film"/></svg></div>
+              <img id="heroThumb" alt="" hidden />
+              <div class="hero-chips">
+                <span class="chip live" id="heroLive" hidden><i></i>LIVE</span>
+                <span class="chip" id="heroQuality" hidden></span>
+                <span class="chip" id="heroDuration" hidden></span>
+              </div>
+            </div>
+            <div class="hero-body">
+              <h2 class="hero-title" id="heroTitle"></h2>
+              <div class="hero-meta" id="heroMeta"></div>
+              <div class="status-line" id="heroStatus"><span class="dot"></span><span class="txt"></span></div>
+              <button class="btn-primary big" id="autoDownload" type="button"><svg><use href="#i-download"/></svg><span>Download</span></button>
+              <div class="hero-foot" id="heroFoot"></div>
+            </div>
+          </article>
+          <button class="more-link glass" id="moreSources" type="button" hidden>
+            <span id="moreText"></span><span class="more-cta">Choose in Manual<svg><use href="#i-chev"/></svg></span>
+          </button>
+        </div>
 
-    <!-- Live view onto the background download (runs even if this popup closes) -->
-    <section id="progressView" class="progress hidden">
-      <button id="backBtn" class="back" type="button">&lsaquo; Back</button>
-      <div id="dlTitle" class="dl-title">Preparing download&hellip;</div>
-      <div id="dlLabel" class="dl-label"></div>
+        <!-- Manual: pick the source and tune everything -->
+        <div id="manualView" hidden>
+          <div class="section-label"><span>Source</span><button class="link-btn" id="clearSources" type="button">Clear list</button></div>
+          <div class="group glass" id="sourceList"></div>
+          <div class="group glass link-add">
+            <svg class="lead"><use href="#i-link"/></svg>
+            <input id="linkInput" type="url" placeholder="Paste a video or playlist link" autocomplete="off" spellcheck="false" />
+            <button class="btn-small" id="linkAdd" type="button">Add</button>
+          </div>
 
-      <div class="bar"><div id="barFill" class="barFill"></div></div>
-      <div id="stat" class="stat"></div>
+          <div id="manualOptions" hidden>
+            <div id="videoGroup">
+              <div class="section-label"><span>Video</span></div>
+              <div class="group glass">
+                <label class="row" id="rowQuality"><span class="row-title">Quality</span><span class="select-wrap"><select id="qualitySel"></select></span></label>
+                <label class="row" id="rowAudio"><span class="row-title">Audio track</span><span class="select-wrap"><select id="audioSel"></select></span></label>
+              </div>
+            </div>
 
-      <p id="dlNote" class="dl-note">
-        You can close this popup — the download keeps running in the background.
-      </p>
+            <div class="section-label"><span>Output</span></div>
+            <div class="group glass">
+              <div class="row col">
+                <span class="row-title">Format</span>
+                <div class="segmented small" id="formatSeg">
+                  <span class="seg-thumb"></span>
+                  <button type="button" data-value="auto">Auto</button>
+                  <button type="button" data-value="mp4">MP4</button>
+                  <button type="button" data-value="original">Original</button>
+                  <button type="button" data-value="audio">Audio</button>
+                </div>
+                <span class="row-note" id="formatNote"></span>
+              </div>
+              <label class="row"><span class="row-title">Also keep original file</span><input type="checkbox" class="switch" id="keepOriginal" /></label>
+              <div class="row">
+                <span class="row-title">Name</span>
+                <span class="name-field"><input id="filenameInput" class="text" type="text" spellcheck="false" /><span class="ext" id="extHint">.mp4</span></span>
+              </div>
+            </div>
 
-      <div class="actions">
-        <button id="cancelBtn" class="danger">Stop &amp; save what we have</button>
-        <button id="convertBtn" class="convert hidden">Convert to MP4</button>
-      </div>
+            <div id="rangeGroup">
+              <div class="section-label"><span>Range</span></div>
+              <div class="group glass">
+                <label class="row"><span class="row-title">Entire video</span><input type="checkbox" class="switch" id="wholeToggle" checked /></label>
+                <div class="row range-row" id="rangeRow" hidden>
+                  <span class="row-title" id="rangeFromLabel">From</span>
+                  <input id="rangeFrom" class="text mini" type="text" placeholder="0:00" />
+                  <span class="row-title">to</span>
+                  <input id="rangeTo" class="text mini" type="text" placeholder="end" />
+                </div>
+                <div class="row-note pad" id="rangeNote" hidden></div>
+              </div>
+            </div>
 
-      <div id="convStat" class="stat"></div>
+            <div id="liveGroup" hidden>
+              <div class="section-label"><span>Live</span></div>
+              <div class="group glass">
+                <label class="row"><span class="row-title">Record live stream</span><input type="checkbox" class="switch" id="liveToggle" checked /></label>
+                <div class="row"><span class="row-title">Stop after</span><div class="stepper" id="liveMax" data-min="0" data-max="600" data-step="5" data-unit=" min" data-zero="Never"></div></div>
+              </div>
+            </div>
 
-      <div id="log" class="log" aria-live="polite"></div>
-    </section>
-  </main>
+            <div class="section-label"><span>Network</span></div>
+            <div class="group glass">
+              <label class="row"><span class="row-title">Adaptive speed<small>Auto-tunes parallel requests</small></span><input type="checkbox" class="switch" id="adaptiveToggle" checked /></label>
+              <div class="row col" id="concRow" hidden>
+                <div class="row-head"><span class="row-title">Parallel requests</span><b id="concVal">8</b></div>
+                <input type="range" id="concRange" min="1" max="32" step="1" value="8" />
+              </div>
+              <div class="row"><span class="row-title">Retries per request</span><div class="stepper" id="retriesStep" data-min="0" data-max="10" data-step="1"></div></div>
+              <div class="row"><span class="row-title">Timeout</span><div class="stepper" id="timeoutStep" data-min="5" data-max="180" data-step="5" data-unit="s"></div></div>
+              <div class="row"><span class="row-title">Delay between requests</span><div class="stepper" id="delayStep" data-min="0" data-max="5000" data-step="100" data-unit="ms"></div></div>
+              <div class="row col">
+                <span class="row-title">If a segment is missing</span>
+                <div class="segmented small" id="missingSeg">
+                  <span class="seg-thumb"></span>
+                  <button type="button" data-value="skip">Skip it</button>
+                  <button type="button" data-value="stop">Stop there</button>
+                </div>
+              </div>
+              <label class="row"><span class="row-title">Send cookies</span><input type="checkbox" class="switch" id="cookiesToggle" checked /></label>
+              <div class="row col">
+                <span class="row-title">Referer<small>Sent as if the page asked — fixes most 403s</small></span>
+                <input id="refererInput" class="text full" type="url" spellcheck="false" placeholder="No Referer" />
+              </div>
+            </div>
 
+            <button class="btn-plain" id="testBtn" type="button"><svg><use href="#i-bolt"/></svg>Test connection</button>
+            <div class="status-line center" id="testResult" hidden><span class="dot"></span><span class="txt"></span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ HISTORY ============ -->
+      <section class="view" id="view-history" hidden>
+        <div class="search glass">
+          <svg><use href="#i-search"/></svg>
+          <input id="historySearch" type="search" placeholder="Search downloads" autocomplete="off" />
+        </div>
+        <div class="chips" id="historyFilter">
+          <button type="button" data-value="all" class="on">All</button>
+          <button type="button" data-value="complete">Completed</button>
+          <button type="button" data-value="partial">Partial</button>
+          <button type="button" data-value="failed">Failed</button>
+        </div>
+        <div class="history-summary" id="historySummary"></div>
+        <div id="historyList"></div>
+        <div class="empty glass" id="historyEmpty" hidden>
+          <div class="empty-orb"><svg><use href="#i-clock"/></svg></div>
+          <h2 id="historyEmptyTitle">No downloads yet</h2>
+          <p id="historyEmptyText">Everything you download shows up here, with quick access to the file and the page it came from.</p>
+        </div>
+        <button class="btn-plain danger" id="clearHistory" type="button" hidden><svg><use href="#i-trash"/></svg>Clear history</button>
+      </section>
+
+      <!-- ============ SETTINGS ============ -->
+      <section class="view" id="view-settings" hidden>
+        <div class="section-label"><span>Downloads</span></div>
+        <div class="group glass">
+          <div class="row col">
+            <span class="row-title">Open in</span>
+            <div class="segmented small" id="setMode">
+              <span class="seg-thumb"></span>
+              <button type="button" data-value="auto">Auto mode</button>
+              <button type="button" data-value="manual">Manual mode</button>
+            </div>
+          </div>
+          <label class="row"><span class="row-title">Format</span><span class="select-wrap"><select id="setFormat">
+            <option value="auto">Auto (best MP4)</option>
+            <option value="mp4">Always MP4</option>
+            <option value="original">Original stream</option>
+            <option value="audio">Audio only</option>
+          </select></span></label>
+          <label class="row"><span class="row-title">Also keep original file</span><input type="checkbox" class="switch" id="setKeepOriginal" /></label>
+          <div class="row col">
+            <span class="row-title">File name<small>Tokens: {title} {site} {quality} {date} {time}</small></span>
+            <input id="setTemplate" class="text full" type="text" spellcheck="false" placeholder="{title}" />
+          </div>
+          <div class="row col">
+            <span class="row-title">Save into subfolder<small>Inside your Downloads folder</small></span>
+            <input id="setSubfolder" class="text full" type="text" spellcheck="false" placeholder="e.g. Videos/Adaptive" />
+          </div>
+          <label class="row"><span class="row-title">Ask where to save each file</span><input type="checkbox" class="switch" id="setSaveAs" /></label>
+        </div>
+
+        <div class="section-label"><span>Network</span></div>
+        <div class="group glass">
+          <label class="row"><span class="row-title">Adaptive speed</span><input type="checkbox" class="switch" id="setAdaptive" /></label>
+          <div class="row col" id="setConcRow" hidden>
+            <div class="row-head"><span class="row-title">Parallel requests</span><b id="setConcVal">8</b></div>
+            <input type="range" id="setConc" min="1" max="32" step="1" value="8" />
+          </div>
+          <div class="row"><span class="row-title">Retries per request</span><div class="stepper" id="setRetries" data-min="0" data-max="10" data-step="1"></div></div>
+          <div class="row"><span class="row-title">Timeout</span><div class="stepper" id="setTimeout" data-min="5" data-max="180" data-step="5" data-unit="s"></div></div>
+          <label class="row"><span class="row-title">Send page as Referer</span><input type="checkbox" class="switch" id="setReferer" /></label>
+          <label class="row"><span class="row-title">Send cookies</span><input type="checkbox" class="switch" id="setCookies" /></label>
+        </div>
+
+        <div class="section-label"><span>Appearance</span></div>
+        <div class="group glass">
+          <div class="row col">
+            <span class="row-title">Theme</span>
+            <div class="segmented small" id="setTheme">
+              <span class="seg-thumb"></span>
+              <button type="button" data-value="system">System</button>
+              <button type="button" data-value="light">Light</button>
+              <button type="button" data-value="dark">Dark</button>
+            </div>
+          </div>
+          <div class="row">
+            <span class="row-title">Accent</span>
+            <div class="swatches" id="setAccent">
+              <button type="button" data-value="blue" aria-label="Blue"></button>
+              <button type="button" data-value="purple" aria-label="Purple"></button>
+              <button type="button" data-value="pink" aria-label="Pink"></button>
+              <button type="button" data-value="orange" aria-label="Orange"></button>
+              <button type="button" data-value="green" aria-label="Green"></button>
+              <button type="button" data-value="graphite" aria-label="Graphite"></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-label"><span>Alerts</span></div>
+        <div class="group glass">
+          <label class="row"><span class="row-title">Notify when a download finishes</span><input type="checkbox" class="switch" id="setNotify" /></label>
+          <label class="row"><span class="row-title">Show video count on the icon</span><input type="checkbox" class="switch" id="setBadge" /></label>
+        </div>
+
+        <div class="section-label"><span>Data</span></div>
+        <div class="group glass">
+          <button class="row action" id="setClearTab" type="button"><span class="row-title">Forget videos found on this tab</span><svg><use href="#i-chev"/></svg></button>
+          <button class="row action danger" id="setClearHistory" type="button"><span class="row-title">Clear download history</span><svg><use href="#i-chev"/></svg></button>
+          <button class="row action" id="setReset" type="button"><span class="row-title">Reset all settings</span><svg><use href="#i-chev"/></svg></button>
+        </div>
+
+        <p class="about"><b>Adaptive Video Downloader</b> <span id="version"></span><br />Only download content you have the right to. DRM-protected video is never bypassed.</p>
+      </section>
+    </main>
+
+    <div class="bottom-fade" aria-hidden="true"></div>
+    <div class="cta-bar" id="ctaBar" hidden>
+      <button class="btn-primary big" id="manualDownload" type="button"><svg><use href="#i-download"/></svg><span>Download</span></button>
+    </div>
+
+    <nav class="tabbar glass" id="tabbar" aria-label="Sections">
+      <span class="tab-thumb"></span>
+      <button type="button" data-view="download" class="on"><svg><use href="#i-download"/></svg><span>Download</span><i class="tab-dot" id="tabDot" hidden></i></button>
+      <button type="button" data-view="history"><svg><use href="#i-clock"/></svg><span>History</span></button>
+      <button type="button" data-view="settings"><svg><use href="#i-gear"/></svg><span>Settings</span></button>
+    </nav>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="shared.js"></script>
+  <script src="manifest.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

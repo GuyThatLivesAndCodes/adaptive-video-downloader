@@ -1,5 +1,5 @@
 // Generates the extension's PNG icons (no external deps — hand-rolled PNG encoder).
-// A blue rounded square with a white "download" glyph (arrow into a tray).
+// A gradient squircle with a white "download" glyph (arrow into a tray).
 import { deflateSync } from 'node:zlib';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -47,40 +47,53 @@ function encodePNG(w, h, rgba) {
   return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))]);
 }
 
+// iOS-style squircle with a blue→indigo gradient, a soft top sheen and a
+// white "download" glyph. Supersampled 4× per pixel for clean edges.
 function drawIcon(S) {
-  const buf = Buffer.alloc(S * S * 4); // transparent
-  const bg = [37, 99, 176, 255];
-  const fg = [255, 255, 255, 255];
-  const r = 0.2 * S;
-  const right = S - 1 - r;
-
-  const inRounded = (x, y) => {
-    if (x < r && y < r) return (x - r) ** 2 + (y - r) ** 2 <= r * r;
-    if (x > right && y < r) return (x - right) ** 2 + (y - r) ** 2 <= r * r;
-    if (x < r && y > right) return (x - r) ** 2 + (y - right) ** 2 <= r * r;
-    if (x > right && y > right) return (x - right) ** 2 + (y - right) ** 2 <= r * r;
-    return true;
+  const buf = Buffer.alloc(S * S * 4);
+  const SS = 4;
+  const top = [10, 132, 255];
+  const bottom = [94, 92, 230];
+  const n = 5; // superellipse exponent (squircle)
+  const inSquircle = (fx, fy) => Math.abs(2 * fx - 1) ** n + Math.abs(2 * fy - 1) ** n <= 1;
+  const seg = (px, py, ax, ay, bx, by) => {
+    const dx = bx - ax, dy = by - ay;
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
   };
+  const stroke = S <= 16 ? 0.085 : 0.068;
+  const inGlyph = (fx, fy) =>
+    seg(fx, fy, 0.5, 0.24, 0.5, 0.6) <= stroke ||
+    seg(fx, fy, 0.33, 0.45, 0.5, 0.62) <= stroke ||
+    seg(fx, fy, 0.67, 0.45, 0.5, 0.62) <= stroke ||
+    seg(fx, fy, 0.29, 0.78, 0.71, 0.78) <= stroke;
 
   for (let y = 0; y < S; y++) {
     for (let x = 0; x < S; x++) {
-      if (!inRounded(x, y)) continue;
-      const fx = x / S;
-      const fy = y / S;
-      let c = bg;
-      const stem = fx >= 0.43 && fx <= 0.57 && fy >= 0.2 && fy <= 0.52;
-      let head = false;
-      if (fy >= 0.5 && fy <= 0.72) {
-        const hw = 0.24 * (1 - (fy - 0.5) / 0.22);
-        if (Math.abs(fx - 0.5) <= hw) head = true;
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let sy = 0; sy < SS; sy++) {
+        for (let sx = 0; sx < SS; sx++) {
+          const fx = (x + (sx + 0.5) / SS) / S;
+          const fy = (y + (sy + 0.5) / SS) / S;
+          if (!inSquircle(fx, fy)) continue;
+          let c;
+          if (inGlyph(fx, fy)) c = [255, 255, 255];
+          else {
+            const t = fy * 0.85 + fx * 0.15;
+            c = top.map((v, i) => v + (bottom[i] - v) * t);
+            const sheen = Math.max(0, 0.18 - fy * 0.4); // glassy highlight
+            c = c.map((v) => v + (255 - v) * sheen);
+          }
+          r += c[0]; g += c[1]; b += c[2]; a += 1;
+        }
       }
-      const tray = fx >= 0.27 && fx <= 0.73 && fy >= 0.78 && fy <= 0.865;
-      if (stem || head || tray) c = fg;
       const i = (y * S + x) * 4;
-      buf[i] = c[0];
-      buf[i + 1] = c[1];
-      buf[i + 2] = c[2];
-      buf[i + 3] = c[3];
+      const cov = a / (SS * SS);
+      if (!a) continue;
+      buf[i] = Math.round(r / a);
+      buf[i + 1] = Math.round(g / a);
+      buf[i + 2] = Math.round(b / a);
+      buf[i + 3] = Math.round(cov * 255);
     }
   }
   return buf;
