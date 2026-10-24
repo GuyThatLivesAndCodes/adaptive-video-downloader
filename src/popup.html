@@ -37,6 +37,7 @@
       <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/></symbol>
       <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.2v.3"/></symbol>
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7.5 3v5.5c0 4.6-3.1 8.2-7.5 9.5-4.4-1.3-7.5-4.9-7.5-9.5V6z"/><path d="M8.8 12.2l2.2 2.2 4.2-4.4"/></symbol>
     </defs>
   </svg>
 
@@ -47,7 +48,10 @@
       <div class="app-icon" aria-hidden="true"><svg><use href="#i-download"/></svg></div>
       <div class="brand">
         <h1 id="viewTitle">Adaptive</h1>
-        <div class="site-chip" id="siteChip"><img id="siteIcon" alt="" /><span id="siteName">—</span></div>
+        <div class="site-chip" id="siteChip">
+          <img id="siteIcon" alt="" /><span id="siteName">—</span>
+          <button class="shield-chip" id="shieldChip" type="button" title="Pop-up shield is on for this tab — click to turn it off" hidden><svg><use href="#i-shield"/></svg><span id="shieldChipText">Shield on</span></button>
+        </div>
       </div>
       <button class="icon-btn glass" id="rescanBtn" type="button" title="Rescan this page" aria-label="Rescan this page"><svg><use href="#i-refresh"/></svg></button>
     </header>
@@ -86,6 +90,19 @@
             <button class="btn-tinted" id="emptyPaste" type="button"><svg><use href="#i-link"/></svg>Paste a link</button>
           </div>
         </div>
+
+        <!-- Play safely: start the video without clicking the page -->
+        <section id="safePlay" class="safe glass" hidden>
+          <div class="safe-head">
+            <div class="safe-icon"><svg><use href="#i-shield"/></svg></div>
+            <div class="safe-text"><b id="safeTitle"></b><small id="safeSub"></small></div>
+            <button class="btn-small safe-mini" id="safePlayMini" type="button">Play safely</button>
+          </div>
+          <div class="safe-hint" id="safeHint" hidden><svg><use href="#i-alert"/></svg>This page has a play button — the usual spot for ad traps.</div>
+          <button class="btn-primary safe-big" id="safePlayBtn" type="button"><svg><use href="#i-play"/></svg><span>Play safely</span></button>
+          <label class="safe-row"><span class="row-title">Block pop-ups on this tab</span><span class="safe-count" id="shieldCount"></span><input type="checkbox" class="switch" id="shieldToggle" /></label>
+          <div class="status-line" id="safeStatus" hidden><span class="dot"></span><span class="txt"></span></div>
+        </section>
 
         <!-- Auto: one best guess, one button -->
         <div id="autoView" hidden>
@@ -297,6 +314,11 @@
         <div class="group glass">
           <label class="row"><span class="row-title">Notify when a download finishes</span><input type="checkbox" class="switch" id="setNotify" /></label>
           <label class="row"><span class="row-title">Show video count on the icon</span><input type="checkbox" class="switch" id="setBadge" /></label>
+        </div>
+
+        <div class="section-label"><span>Protection</span></div>
+        <div class="group glass">
+          <label class="row"><span class="row-title">Pop-up shield with Play safely<small>Closes tabs other sites open and undoes ad redirects</small></span><input type="checkbox" class="switch" id="setShieldAuto" /></label>
         </div>
 
         <div class="section-label"><span>Data</span></div>

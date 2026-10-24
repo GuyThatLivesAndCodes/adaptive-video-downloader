@@ -46,6 +46,34 @@ DRM-protected streams (Widevine, FairPlay, PlayReady, SAMPLE-AES) are detected
 and refused — the extension never bypasses DRM. YouTube and the major DRM
 streaming services show a red “unavailable” view instead of a scan.
 
+### Play safely & pop-up shield
+
+Many video sites hide an invisible layer over the player, so the first click on
+“play” opens an ad tab or redirects the page. **Play safely** starts the video
+without any real click on the page:
+
+1. pop-up windows are switched off in the page for 30 seconds;
+2. invisible layers stacked over the player are disabled (they stop catching
+   clicks — the player's own controls are left alone);
+3. the player library is asked to play (JW Player, video.js, Flowplayer,
+   Clappr), then the `<video>` itself (muted if the browser's autoplay rules
+   insist);
+4. as a last resort, the player's own play button gets a click that doesn't
+   bubble — its handler runs, document-wide ad listeners never see it.
+
+It runs in every frame (embedded players included), then rescans for the stream.
+
+The **pop-up shield** (turned on by Play safely, or by its switch) keeps
+protecting the tab: new tabs or windows it opens to *another* site are closed
+immediately and focus returns to the video (same-site tabs are allowed), and for
+20 seconds after Play safely, a jump of the tab itself to another site is undone.
+A header chip shows how much was blocked; the shield switches itself off when
+you take the tab to a different site.
+
+Limits: it can't skip ads that play *inside* the video stream, and a redirect
+triggered by your own later clicks outside the 20-second window isn't undone
+(new ad tabs still are).
+
 ### Reliability
 
 - **Adaptive concurrency (AIMD)** — starts polite, adds connections while the
@@ -75,7 +103,7 @@ the page link, or be removed. Detects files that were moved or deleted.
 
 ### Settings
 
-Default mode, default format, filename template (`{title} {site} {quality}
+Default mode, default format, pop-up shield with Play safely, filename template (`{title} {site} {quality}
 {date} {time}`), Downloads subfolder, “ask where to save”, network defaults,
 theme (System / Light / Dark), accent colour, completion notifications, and the
 video-count badge on the toolbar icon.

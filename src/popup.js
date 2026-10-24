@@ -39,6 +39,8 @@ const state = {
   historyQuery: '',
   openHistoryId: null,
   logOpen: new Set(),
+  shield: null,
+  safeBusy: false,
 };
 
 /* ---------------- tiny DOM helpers ---------------- */
@@ -267,9 +269,13 @@ function avdPageProbe() {
       return '';
     }
   };
+  const playButton = !!document.querySelector(
+    '.vjs-big-play-button,.jw-display-icon-container,.plyr__control--overlaid,.fp-play,.mejs__overlay-button,[class*="play-button" i],[class*="playbutton" i],[class*="btn-play" i],button[aria-label*="play" i]'
+  );
   return {
     top: window === window.top,
     vids,
+    needsPlay: playButton || vids.some((v) => !v.playing && v.w > 160),
     iw: innerWidth,
     ih: innerHeight,
     ogTitle: meta('og:title') || meta('twitter:title'),
@@ -311,10 +317,256 @@ async function probePage() {
     ih: top.ih,
     video,
     duration: video ? video.duration : 0,
+    needsPlay: frames.some((f) => f.needsPlay) && !all.some((v) => v.playing),
     srcs: all.map((v) => v.src).filter((s) => /^https?:/i.test(s)),
     manifests: frames.flatMap((f) => f.manifests || []),
     files: frames.flatMap((f) => f.files || []),
   };
+}
+
+// Runs in every frame, in the page's own JS world. Starts playback WITHOUT a
+// real click on the page, so click-jacking overlays and "first click opens an
+// ad" scripts never fire:
+//   1. silence window.open for a while (pop-ups need it, players don't);
+//   2. disable invisible layers stacked on top of the player;
+//   3. ask the player library to play (JW Player, video.js, Flowplayer…);
+//   4. call play() on the <video> itself (muted if autoplay rules insist);
+//   5. last resort: a NON-bubbling click on the player's own play button, which
+//      reaches the button's handler but not the document-level ad listeners.
+async function avdSafePlay() {
+  const W = window.wrappedJSObject || window; // Firefox isolated-world fallback
+  const out = { top: window === window.top, started: false, muted: false, method: '', unmasked: 0, popups: 0, videos: 0 };
+  const area = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 ? r.width * r.height : 0;
+  };
+
+  try {
+    if (!W.__avdSafe) {
+      W.__avdSafe = true;
+      const original = W.open;
+      const blocked = function () {
+        out.popups++;
+        return null;
+      };
+      W.open = typeof exportFunction === 'function' && window.wrappedJSObject ? exportFunction(blocked, window) : blocked;
+      setTimeout(() => {
+        try {
+          W.open = original;
+          W.__avdSafe = false;
+        } catch (e) {}
+      }, 30000);
+    }
+  } catch (e) {}
+
+  const vids = [...document.querySelectorAll('video')].sort((a, b) => area(b) - area(a));
+  out.videos = vids.length;
+  let target = vids.find((v) => area(v) > 0) || null;
+  if (!target && window === window.top) {
+    // Player inside an iframe: guard the iframe's box instead.
+    target = [...document.querySelectorAll('iframe')].filter((f) => area(f) > 200 * 110).sort((a, b) => area(b) - area(a))[0] || null;
+  }
+
+  // Player container = the outermost ancestor that is still about the video's size.
+  let box = target;
+  if (target) {
+    const ta = area(target);
+    for (let el = target.parentElement, i = 0; el && el !== document.body && i < 6; el = el.parentElement, i++) {
+      if (area(el) <= ta * 1.6) box = el;
+      else break;
+    }
+    const r = target.getBoundingClientRect();
+    const pts = [
+      [0.5, 0.5],
+      [0.25, 0.3],
+      [0.75, 0.7],
+    ];
+    const seen = new Set();
+    for (const [fx, fy] of pts) {
+      const x = r.left + r.width * fx;
+      const y = r.top + r.height * fy;
+      if (x < 0 || y < 0 || x > innerWidth || y > innerHeight) continue;
+      for (const el of document.elementsFromPoint(x, y)) {
+        if (el === target || box.contains(el) || el.contains(box)) break;
+        if (seen.has(el) || el === document.documentElement || el === document.body) continue;
+        seen.add(el);
+        el.style.setProperty('pointer-events', 'none', 'important');
+        if (el.tagName === 'IFRAME' || parseFloat(getComputedStyle(el).opacity) < 0.15) el.style.setProperty('visibility', 'hidden', 'important');
+        out.unmasked++;
+      }
+    }
+  }
+
+  // Re-query each time: lazy players create their <video> only once started.
+  const allVids = () => [...document.querySelectorAll('video')];
+  const playing = () => allVids().some((v) => !v.paused && !v.ended && v.readyState > 1);
+  const hasSource = (v) => !!(v.currentSrc || v.src || v.srcObject || v.querySelector('source[src]'));
+  // play() on a video with nothing loaded can stay pending forever: cap it.
+  // Retry muted only when the browser's autoplay policy refused it.
+  const tryPlay = async (v) => {
+    const attempt = () => Promise.race([v.play(), new Promise((res) => setTimeout(() => res('pending'), 1500))]);
+    try {
+      await attempt();
+    } catch (e) {
+      if (!e || e.name !== 'NotAllowedError') return;
+      try {
+        v.muted = true;
+        await attempt();
+        out.muted = true;
+      } catch (e2) {}
+    }
+  };
+  const waitPlaying = async (ms) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (playing()) return true;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return playing();
+  };
+
+  // Player libraries know how to load their own source.
+  const libs = [
+    ['JW Player', () => typeof W.jwplayer === 'function', () => W.jwplayer().play()],
+    ['video.js', () => W.videojs && W.videojs.getPlayers, () => Object.values(W.videojs.getPlayers()).forEach((p) => p && p.play && p.play())],
+    ['Flowplayer', () => typeof W.flowplayer === 'function', () => W.flowplayer().play()],
+    ['Clappr', () => W.player && W.player.core && W.player.play, () => W.player.play()],
+  ];
+  for (const [name, has, play] of libs) {
+    try {
+      if (!has()) continue;
+      play();
+      if (await waitPlaying(1200)) {
+        out.method = name;
+        break;
+      }
+    } catch (e) {}
+  }
+
+  if (!playing()) {
+    for (const v of vids) {
+      if (!v.paused || !hasSource(v)) continue;
+      await tryPlay(v);
+      if (playing()) {
+        out.method = out.method || 'video';
+        break;
+      }
+    }
+  }
+
+  if (!playing()) {
+    const scope = box && box !== target ? box : document;
+    const btn = [
+      ...scope.querySelectorAll(
+        '.vjs-big-play-button,.jw-display-icon-container,.jw-icon-display,.plyr__control--overlaid,.fp-play,.mejs__overlay-button,.ytp-large-play-button,[class*="play-button" i],[class*="playbutton" i],[class*="btn-play" i],button[aria-label*="play" i],[role="button"][aria-label*="play" i]'
+      ),
+    ]
+      .filter((el) => area(el) > 0)
+      .sort((a, b) => area(b) - area(a))[0];
+    if (btn) {
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        const Ev = type.startsWith('pointer') && typeof PointerEvent === 'function' ? PointerEvent : MouseEvent;
+        btn.dispatchEvent(new Ev(type, { bubbles: false, cancelable: true, view: window }));
+      }
+      out.method = out.method || 'button';
+      // The button's own play() can be refused without a real gesture; retry muted.
+      await new Promise((r) => setTimeout(r, 700));
+      for (const v of allVids()) if (v.paused && hasSource(v)) await tryPlay(v);
+    }
+  }
+
+  out.started = await waitPlaying(2500);
+  out.muted = out.muted || allVids().some((v) => !v.paused && v.muted);
+  return out;
+}
+
+async function runSafePlay(tabId) {
+  const exec = async (world) => {
+    if (api.scripting && api.scripting.executeScript) {
+      const r = await api.scripting.executeScript({ target: { tabId, allFrames: true }, func: avdSafePlay, ...(world ? { world } : {}) });
+      return (r || []).map((x) => x && x.result).filter(Boolean);
+    }
+    return ((await api.tabs.executeScript(tabId, { code: '(' + avdSafePlay + ')()', allFrames: true })) || []).filter(Boolean);
+  };
+  let frames;
+  try {
+    frames = await exec('MAIN');
+  } catch (e) {
+    frames = await exec(null); // e.g. older Firefox without world: MAIN
+  }
+  return {
+    started: frames.some((f) => f.started),
+    muted: frames.some((f) => f.started && f.muted),
+    unmasked: frames.reduce((n, f) => n + f.unmasked, 0),
+    popups: frames.reduce((n, f) => n + f.popups, 0),
+    videos: frames.reduce((n, f) => n + f.videos, 0),
+  };
+}
+
+async function safePlay(btn) {
+  if (!state.tab || state.safeBusy) return;
+  state.safeBusy = true;
+  const el = $('safeStatus');
+  const say = (cls, text) => {
+    el.hidden = false;
+    statusLine(el, cls, text);
+  };
+  if (btn) btn.disabled = true;
+  try {
+    say('busy', 'Starting the video for you…');
+    if (state.settings.shieldWithSafePlay) await setShield(true, true);
+    let r;
+    try {
+      r = await Promise.race([runSafePlay(state.tab.id), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000))]);
+    } catch (e) {
+      say('err', 'This page can’t be controlled by extensions. Click play yourself — the shield still blocks pop-ups.');
+      return;
+    }
+    const extra = [r.unmasked ? `${r.unmasked} hidden click-trap${r.unmasked === 1 ? '' : 's'} removed` : '', r.popups ? `${r.popups} pop-up${r.popups === 1 ? '' : 's'} stopped` : '']
+      .filter(Boolean)
+      .join(' · ');
+    if (r.started) {
+      say('ok', `Playing${r.muted ? ' (muted — unmute on the page)' : ''}. Looking for the stream…` + (extra ? ` ${extra}.` : ''));
+      await new Promise((res) => setTimeout(res, 2500));
+      state.thumbPromise = null;
+      state.thumb = '';
+      await scan();
+      say('ok', state.candidates.length ? 'Video found — ready to download.' : 'Playing, but no downloadable stream showed up yet. Give it a few seconds and rescan.');
+    } else {
+      say(
+        'warn',
+        (r.videos ? 'Couldn’t start it automatically.' : 'No player found to start.') +
+          ' Click play on the page' +
+          (shieldOn() ? ' — pop-ups to other sites will be closed.' : '.') +
+          (extra ? ` (${extra})` : '')
+      );
+    }
+  } finally {
+    state.safeBusy = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* ---------------- pop-up shield ---------------- */
+
+function shieldOn() {
+  return !!state.shield;
+}
+
+async function setShield(on, guard) {
+  if (!state.tab) return;
+  const r = await send({ type: 'avd:shield', tabId: state.tab.id, on, guard });
+  state.shield = (r && r.shield) || null;
+  renderShield();
+}
+
+function renderShield() {
+  const sh = state.shield;
+  $('shieldToggle').checked = !!sh;
+  const n = sh ? sh.blocked : 0;
+  $('shieldCount').textContent = sh ? (n ? `${n} blocked` : 'On') : '';
+  $('shieldChip').hidden = !sh || state.view !== 'download';
+  $('shieldChipText').textContent = n ? `${n} blocked` : 'Shield on';
 }
 
 function loadImage(src) {
@@ -774,7 +1026,24 @@ function renderDownload() {
   $('manualView').hidden = locked || state.mode !== 'manual' || (state.scanning && !has);
   if (!locked && state.mode === 'auto' && has) renderAuto();
   if (!locked && state.mode === 'manual') renderManual();
+  renderSafe();
   renderCta();
+}
+
+// Full card when nothing is found; a compact one once a video is listed.
+function renderSafe() {
+  const web = state.tab && /^https?:/i.test(state.tab.url || '');
+  const card = $('safePlay');
+  card.hidden = !!state.locked || !web || (state.scanning && !state.candidates.length);
+  const compact = state.candidates.length > 0;
+  card.classList.toggle('compact', compact);
+  $('safeTitle').textContent = compact ? 'Wrong video, or ads in the way?' : 'Play button sends you to ads?';
+  $('safeSub').textContent = compact
+    ? 'Let Adaptive start the real video — no clicks on the page.'
+    : 'Let Adaptive start the video for you. Fake play buttons and pop-ups can’t hijack it.';
+  $('safeHint').hidden = !(state.page && state.page.needsPlay) || compact;
+  card.classList.toggle('top', compact && state.mode === 'manual');
+  $('emptyState').classList.toggle('slim', !card.hidden);
 }
 
 function statusLine(el, cls, text) {
@@ -1464,6 +1733,7 @@ function setView(v) {
   $('modeWrap').hidden = v !== 'download' || !!state.locked;
   $('rescanBtn').hidden = v !== 'download' || !!state.locked;
   $('siteChip').hidden = v !== 'download';
+  renderShield();
   $('viewTitle').textContent = v === 'history' ? 'History' : v === 'settings' ? 'Settings' : 'Adaptive';
   $('scroller').scrollTop = 0;
   if (v === 'history') renderHistory();
@@ -1557,6 +1827,7 @@ function wireSettings() {
   bindSwitch('setCookies', 'sendCookies');
   bindSwitch('setNotify', 'notify');
   bindSwitch('setBadge', 'badge');
+  bindSwitch('setShieldAuto', 'shieldWithSafePlay');
   const tpl = $('setTemplate');
   tpl.value = s.filenameTemplate;
   tpl.addEventListener('input', () => saveSettings({ filenameTemplate: tpl.value.trim() || '{title}' }));
@@ -1622,6 +1893,13 @@ function wireShell() {
     scan();
   });
   $('emptyRescan').addEventListener('click', () => scan());
+  $('safePlayBtn').addEventListener('click', (e) => safePlay(e.currentTarget));
+  $('safePlayMini').addEventListener('click', (e) => safePlay(e.currentTarget));
+  $('shieldToggle').addEventListener('change', (e) => setShield(e.target.checked, false));
+  $('shieldChip').addEventListener('click', () => {
+    setShield(false, false);
+    toast('Pop-up shield off for this tab');
+  });
   $('emptyPaste').addEventListener('click', () => {
     setMode('manual', false);
     setTimeout(() => $('linkInput').focus(), 50);
@@ -1654,6 +1932,12 @@ function wireShell() {
     if (area === 'session' && changes[K.state]) {
       state.engine = changes[K.state].newValue || null;
       renderEngine();
+    }
+    if (area === 'session' && changes[K.shields] && state.tab) {
+      const prev = state.shield;
+      state.shield = (changes[K.shields].newValue || {})[state.tab.id] || null;
+      if (prev && state.shield && state.shield.blocked > prev.blocked) toast('Blocked a pop-up ad');
+      renderShield();
     }
     if (area === 'local' && changes[K.history]) {
       state.history = changes[K.history].newValue || [];
@@ -1696,6 +1980,13 @@ async function init() {
   }
   renderEngine();
   loadHistory();
+  if (state.tab) {
+    try {
+      const d = await api.storage.session.get(K.shields);
+      state.shield = ((d && d[K.shields]) || {})[state.tab.id] || null;
+    } catch (e) {}
+    renderShield();
+  }
 
   const blocked = AVD.matchUnsupported(url);
   if (blocked) {

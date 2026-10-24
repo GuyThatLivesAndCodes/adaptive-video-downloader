@@ -387,7 +387,113 @@ api.webRequest.onHeadersReceived.addListener(
   ['responseHeaders']
 );
 
-api.tabs.onRemoved.addListener((tabId) => resetTab(tabId));
+api.tabs.onRemoved.addListener((tabId) => {
+  resetTab(tabId);
+  if (shields[tabId]) {
+    delete shields[tabId];
+    saveShields();
+  }
+});
+
+/* ---------------- pop-up shield ---------------- */
+//
+// Video sites love invisible overlays that turn the first click on "play" into
+// a pop-under or a redirect. With the shield on for a tab:
+//   • any new tab/window it opens to ANOTHER site is closed immediately and
+//     focus returns to the video (same-site tabs are left alone);
+//   • right after "Play safely", a jump of the tab itself to another site is
+//     undone once (the redirect guard).
+// The shield turns itself off when the user takes the tab to a different site.
+
+const GUARD_MS = 20000;
+let shields = {};
+const shieldsReady = api.storage.session
+  .get(K.shields)
+  .then((d) => {
+    shields = (d && d[K.shields]) || {};
+  })
+  .catch(() => {});
+function saveShields() {
+  api.storage.session.set({ [K.shields]: shields }).catch(() => {});
+}
+
+async function setShield(tabId, on, guard) {
+  await shieldsReady;
+  if (!on) {
+    delete shields[tabId];
+  } else {
+    const tab = await api.tabs.get(tabId).catch(() => null);
+    if (!tab) return null;
+    const prev = shields[tabId];
+    shields[tabId] = {
+      site: AVD.siteKey(tab.url || ''),
+      blocked: prev ? prev.blocked : 0,
+      guardUntil: guard ? Date.now() + GUARD_MS : prev ? prev.guardUntil : 0,
+    };
+  }
+  saveShields();
+  return shields[tabId] || null;
+}
+
+const pendingPopups = new Map(); // new tabId → opener tabId (URL not known yet)
+
+function blockPopup(tabId, openerId) {
+  const sh = shields[openerId];
+  pendingPopups.delete(tabId);
+  if (!sh) return;
+  sh.blocked++;
+  saveShields();
+  api.tabs.remove(tabId).catch(() => {});
+  api.tabs.update(openerId, { active: true }).catch(() => {});
+}
+
+function judgePopup(tabId, openerId, url) {
+  const sh = shields[openerId];
+  if (!sh) return pendingPopups.delete(tabId);
+  if (!url || url === 'about:blank') return; // wait for the real destination
+  if (AVD.siteKey(url) !== sh.site) blockPopup(tabId, openerId);
+  else pendingPopups.delete(tabId);
+}
+
+api.tabs.onCreated.addListener((tab) => {
+  shieldsReady.then(() => {
+    const opener = tab.openerTabId;
+    if (opener == null || !shields[opener]) return;
+    pendingPopups.set(tab.id, opener);
+    judgePopup(tab.id, opener, tab.pendingUrl || tab.url);
+    // Pop-unders that never leave about:blank are closed too.
+    setTimeout(() => {
+      if (pendingPopups.get(tab.id) !== opener) return;
+      api.tabs
+        .get(tab.id)
+        .then((t) => {
+          const u = t.pendingUrl || t.url || '';
+          if (!u || u === 'about:blank') blockPopup(tab.id, opener);
+          else judgePopup(tab.id, opener, u);
+        })
+        .catch(() => pendingPopups.delete(tab.id));
+    }, 3000);
+  });
+});
+
+api.tabs.onUpdated.addListener((tabId, info) => {
+  if (!info.url) return;
+  shieldsReady.then(() => {
+    if (pendingPopups.has(tabId)) judgePopup(tabId, pendingPopups.get(tabId), info.url);
+    const sh = shields[tabId];
+    if (!sh || !/^https?:/i.test(info.url) || AVD.siteKey(info.url) === sh.site) return;
+    if (Date.now() < sh.guardUntil) {
+      // Hijacked straight after Play safely → put the video page back, once.
+      sh.guardUntil = 0;
+      sh.blocked++;
+      saveShields();
+      api.tabs.goBack(tabId).catch(() => {});
+    } else {
+      delete shields[tabId]; // the user went somewhere else
+      saveShields();
+    }
+  });
+});
 
 /* ---------------- Referer / Origin for the engine's requests ---------------- */
 //
@@ -699,6 +805,8 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case 'avd:candidates':
         await hydrate();
         return candidatesFor(msg.tabId);
+      case 'avd:shield':
+        return { shield: await setShield(msg.tabId, !!msg.on, !!msg.guard) };
       case 'avd:clearTab':
         await hydrate();
         resetTab(msg.tabId);

@@ -7,6 +7,7 @@
     streams: 'avd:streams', // session: { [tabId]: { [family]: template } }
     media: 'avd:media', //     session: { [tabId]: [ file ] }
     manifests: 'avd:manifests', // session: { [tabId]: [ manifest ] }
+    shields: 'avd:shields', //   session: { [tabId]: { site, blocked, guardUntil } }
     state: 'avd:state', //     session: engine progress snapshot
     history: 'avd:history', // local: [ record ] newest first
     settings: 'avd:settings', // local
@@ -31,6 +32,7 @@
     sendCookies: true,
     onMissing: 'skip', //       skip | stop
     historyLimit: 500,
+    shieldWithSafePlay: true, // Play safely also turns on the pop-up shield
   };
 
   // Sites we deliberately don't support: YouTube (throttled DASH + ToS) and
@@ -52,6 +54,18 @@
     { hosts: ['peacocktv.com'], name: 'Peacock', drm: true },
     { hosts: ['paramountplus.com'], name: 'Paramount+', drm: true },
   ];
+
+  // Registrable-domain approximation ("www.a.example.co.uk" → "example.co.uk"),
+  // good enough to tell a site's own tabs from an ad network's.
+  function siteKey(url) {
+    const host = hostnameOf(url);
+    if (!host || /^[\d.]+$/.test(host) || host.includes(':')) return host;
+    const parts = host.split('.');
+    if (parts.length <= 2) return host;
+    const sld = parts[parts.length - 2];
+    const take = parts[parts.length - 1].length === 2 && sld.length <= 3 ? 3 : 2;
+    return parts.slice(-take).join('.');
+  }
 
   function hostnameOf(url) {
     try {
@@ -181,6 +195,7 @@
     DEFAULT_SETTINGS,
     UNSUPPORTED_SITES,
     hostnameOf,
+    siteKey,
     siteName,
     matchUnsupported,
     unsupportedReason,
