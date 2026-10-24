@@ -8,6 +8,8 @@
     media: 'avd:media', //     session: { [tabId]: [ file ] }
     manifests: 'avd:manifests', // session: { [tabId]: [ manifest ] }
     shields: 'avd:shields', //   session: { [tabId]: { site, blocked, guardUntil } }
+    captions: 'avd:captions', // session: { [tabId]: [ caption file ] }
+    risk: 'avd:risk', //         session: { [site]: { popups, redirects } }
     state: 'avd:state', //     session: engine progress snapshot
     history: 'avd:history', // local: [ record ] newest first
     settings: 'avd:settings', // local
@@ -33,6 +35,10 @@
     onMissing: 'skip', //       skip | stop
     historyLimit: 500,
     shieldWithSafePlay: true, // Play safely also turns on the pop-up shield
+    sketchySites: [], //       sites marked sketchy: always guarded
+    captions: true, //          download captions with videos
+    captionFormat: 'srt', //    srt | vtt
+    captionEmbed: true, //      also embed them in MP4s
   };
 
   // Sites we deliberately don't support: YouTube (throttled DASH + ToS) and

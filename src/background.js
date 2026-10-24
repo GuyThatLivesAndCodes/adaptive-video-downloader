@@ -23,6 +23,10 @@ const SELF_ORIGIN = api.runtime.getURL('').replace(/\/$/, '');
 const FIREFOX_ENGINE = !!globalThis.AVD_Engine; // engine is in this page (Firefox)
 
 const VIDEO_EXT_RE = /\.(mp4|m4v|webm|mov|ogv|mkv|ts)(\?|#|$)/i;
+const CAPTION_EXT_RE = /\.(vtt|webvtt|srt|ttml|dfxp)(\?|#|$)/i;
+const CAPTION_MIME_RE = /^(text\/vtt|application\/x-subrip|text\/srt|application\/ttml\+xml)/i;
+// WebVTT pieces of an HLS subtitle playlist, not standalone caption files.
+const CAPTION_SEGMENT_RE = /((seg(ment)?|chunk|frag(ment)?|fileSequence|part)[-_]?\d+|\d{3,})\.(web)?vtt$/i;
 const MANIFEST_EXT_RE = /\.(m3u8|mpd)(\?|#|$)/i;
 const HLS_MIME_RE = /(application|audio)\/(vnd\.apple\.mpegurl|x-mpegurl|mpegurl)/i;
 const DASH_MIME_RE = /application\/dash\+xml/i;
@@ -30,7 +34,7 @@ const DASH_MIME_RE = /application\/dash\+xml/i;
 /* ---------------- settings ---------------- */
 
 let settings = { ...AVD.DEFAULT_SETTINGS };
-api.storage.local
+const settingsReady = api.storage.local
   .get(K.settings)
   .then((d) => {
     settings = { ...AVD.DEFAULT_SETTINGS, ...((d && d[K.settings]) || {}) };
@@ -40,6 +44,7 @@ api.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes[K.settings]) {
     settings = { ...AVD.DEFAULT_SETTINGS, ...(changes[K.settings].newValue || {}) };
     refreshAllBadges();
+    syncGuards();
   }
 });
 
@@ -48,6 +53,7 @@ api.storage.onChanged.addListener((changes, area) => {
 let streamStore = {};
 let mediaStore = {};
 let manifestStore = {};
+let captionStore = {};
 let hydrated = false;
 let hydrating = null;
 
@@ -55,11 +61,12 @@ function hydrate() {
   if (hydrated) return Promise.resolve();
   if (!hydrating) {
     hydrating = api.storage.session
-      .get([K.streams, K.media, K.manifests])
+      .get([K.streams, K.media, K.manifests, K.captions])
       .then((d) => {
         streamStore = (d && d[K.streams]) || {};
         mediaStore = (d && d[K.media]) || {};
         manifestStore = (d && d[K.manifests]) || {};
+        captionStore = (d && d[K.captions]) || {};
         prune();
         hydrated = true;
       })
@@ -90,7 +97,7 @@ function scheduleSave() {
   saveTimer = setTimeout(() => {
     saveTimer = null;
     api.storage.session
-      .set({ [K.streams]: streamStore, [K.media]: mediaStore, [K.manifests]: manifestStore })
+      .set({ [K.streams]: streamStore, [K.media]: mediaStore, [K.manifests]: manifestStore, [K.captions]: captionStore })
       .catch(() => {});
   }, 300);
 }
@@ -269,10 +276,25 @@ async function inspect(tabId, entry) {
   }
 }
 
+function recordCaption(tabId, url, mime) {
+  if (!/^https?:/i.test(url) || CAPTION_SEGMENT_RE.test(bare(url))) return;
+  const tabKey = String(tabId);
+  const list = (captionStore[tabKey] = captionStore[tabKey] || []);
+  const b = bare(url);
+  const existing = list.find((x) => bare(x.url) === b);
+  if (existing) {
+    existing.url = url;
+    return scheduleSave();
+  }
+  list.push({ url, mime: mime || '', ts: Date.now() });
+  while (list.length > 20) list.shift();
+  scheduleSave();
+}
+
 function resetTab(tabId) {
   const k = String(tabId);
   let changed = false;
-  for (const store of [streamStore, mediaStore, manifestStore]) {
+  for (const store of [streamStore, mediaStore, manifestStore, captionStore]) {
     if (store[k]) {
       delete store[k];
       changed = true;
@@ -297,7 +319,8 @@ function candidatesFor(tabId) {
     .filter(([, v]) => v && typeof v.pre === 'string')
     .map(([key, v]) => ({ key, ...v, covered: covered.some((d) => v.pre.startsWith(d)) }));
   const media = (mediaStore[k] || []).slice().reverse();
-  return { manifests: lists, hiddenManifests: manifests.length - lists.length, streams, media };
+  const captions = (captionStore[k] || []).filter((c) => !children.has(bare(c.url)));
+  return { manifests: lists, hiddenManifests: manifests.length - lists.length, streams, media, captions };
 }
 
 /* ---------------- badge ---------------- */
@@ -343,6 +366,7 @@ api.webRequest.onBeforeRequest.addListener(
         return;
       }
       const url = details.url;
+      if (CAPTION_EXT_RE.test(bare(url) + '?')) return recordCaption(details.tabId, url, '');
       if (MANIFEST_EXT_RE.test(bare(url) + '?')) {
         recordManifest(details.tabId, url, /\.mpd$/i.test(bare(url)) ? 'dash' : 'hls');
         return;
@@ -376,6 +400,7 @@ api.webRequest.onHeadersReceived.addListener(
         }
       }
       const url = details.url;
+      if (CAPTION_MIME_RE.test(mime)) return recordCaption(details.tabId, url, mime);
       if (HLS_MIME_RE.test(mime)) return recordManifest(details.tabId, url, 'hls');
       if (DASH_MIME_RE.test(mime)) return recordManifest(details.tabId, url, 'dash');
       if (MANIFEST_EXT_RE.test(bare(url) + '?') || findSegIndex(url)) return;
@@ -395,26 +420,47 @@ api.tabs.onRemoved.addListener((tabId) => {
   }
 });
 
-/* ---------------- pop-up shield ---------------- */
+/* ---------------- pop-up shield & sketchy sites ---------------- */
 //
 // Video sites love invisible overlays that turn the first click on "play" into
 // a pop-under or a redirect. With the shield on for a tab:
 //   • any new tab/window it opens to ANOTHER site is closed immediately and
 //     focus returns to the video (same-site tabs are left alone);
-//   • right after "Play safely", a jump of the tab itself to another site is
-//     undone once (the redirect guard).
-// The shield turns itself off when the user takes the tab to a different site.
+//   • a jump of the tab itself to another site that the user didn't ask for is
+//     undone — for 20 s after "Play safely", or always on a site the user
+//     marked as sketchy.
+// "Did the user ask?" = typed/bookmarked/reload/back-forward navigations, or a
+// cross-site link the in-page guard (guard.js) let through after a confirm.
+// On sketchy sites guard.js also neutralises click-traps, ad links and
+// window.open from the first byte of every page load.
+//
+// Pop-ups and redirects are also counted per site even with no shield, so the
+// popup can suggest "Mark as sketchy".
 
 const GUARD_MS = 20000;
+const ALLOW_MS = 6000;
 let shields = {};
+let risk = {};
 const shieldsReady = api.storage.session
-  .get(K.shields)
+  .get([K.shields, K.risk])
   .then((d) => {
     shields = (d && d[K.shields]) || {};
+    risk = (d && d[K.risk]) || {};
   })
   .catch(() => {});
 function saveShields() {
-  api.storage.session.set({ [K.shields]: shields }).catch(() => {});
+  api.storage.session.set({ [K.shields]: shields, [K.risk]: risk }).catch(() => {});
+}
+
+const isSketchy = (site) => !!site && (settings.sketchySites || []).includes(site);
+const tabSites = new Map(); // tabId → site of the committed top-level page
+const allowNav = new Map(); // tabId → { site, until } the user confirmed
+
+function bumpRisk(site, field) {
+  if (!site) return;
+  const r = (risk[site] = risk[site] || { popups: 0, redirects: 0 });
+  r[field]++;
+  saveShields();
 }
 
 async function setShield(tabId, on, guard) {
@@ -425,42 +471,59 @@ async function setShield(tabId, on, guard) {
     const tab = await api.tabs.get(tabId).catch(() => null);
     if (!tab) return null;
     const prev = shields[tabId];
+    const site = AVD.siteKey(tab.url || '');
     shields[tabId] = {
-      site: AVD.siteKey(tab.url || ''),
+      site,
       blocked: prev ? prev.blocked : 0,
       guardUntil: guard ? Date.now() + GUARD_MS : prev ? prev.guardUntil : 0,
+      sketchy: isSketchy(site),
     };
   }
   saveShields();
   return shields[tabId] || null;
 }
 
-const pendingPopups = new Map(); // new tabId → opener tabId (URL not known yet)
-
-function blockPopup(tabId, openerId) {
-  const sh = shields[openerId];
-  pendingPopups.delete(tabId);
+function countBlocked(tabId) {
+  const sh = shields[tabId];
   if (!sh) return;
   sh.blocked++;
   saveShields();
+}
+
+const pendingPopups = new Map(); // new tabId → opener tabId (URL not known yet)
+
+function blockPopup(tabId, openerId) {
+  pendingPopups.delete(tabId);
+  if (!shields[openerId]) return;
+  countBlocked(openerId);
   api.tabs.remove(tabId).catch(() => {});
   api.tabs.update(openerId, { active: true }).catch(() => {});
 }
 
+const foregroundPopups = new Set(); // new tabs that opened in front (pop-up style)
+
 function judgePopup(tabId, openerId, url) {
-  const sh = shields[openerId];
-  if (!sh) return pendingPopups.delete(tabId);
   if (!url || url === 'about:blank') return; // wait for the real destination
-  if (AVD.siteKey(url) !== sh.site) blockPopup(tabId, openerId);
-  else pendingPopups.delete(tabId);
+  pendingPopups.delete(tabId);
+  if (!/^https?:/i.test(url)) return;
+  const openerSite = tabSites.get(openerId) || (shields[openerId] && shields[openerId].site);
+  const site = AVD.siteKey(url);
+  if (!openerSite || site === openerSite) return;
+  // Ctrl/middle-click background tabs are the user's own; pop-ups open in front.
+  if (foregroundPopups.delete(tabId)) bumpRisk(openerSite, 'popups');
+  const allow = allowNav.get(openerId);
+  if (allow && allow.site === site && Date.now() < allow.until) return allowNav.delete(openerId); // one confirmed click = one pass
+  if (shields[openerId]) blockPopup(tabId, openerId);
 }
 
 api.tabs.onCreated.addListener((tab) => {
   shieldsReady.then(() => {
     const opener = tab.openerTabId;
-    if (opener == null || !shields[opener]) return;
+    if (opener == null) return;
     pendingPopups.set(tab.id, opener);
+    if (tab.active) foregroundPopups.add(tab.id);
     judgePopup(tab.id, opener, tab.pendingUrl || tab.url);
+    if (!shields[opener]) return;
     // Pop-unders that never leave about:blank are closed too.
     setTimeout(() => {
       if (pendingPopups.get(tab.id) !== opener) return;
@@ -477,23 +540,102 @@ api.tabs.onCreated.addListener((tab) => {
 });
 
 api.tabs.onUpdated.addListener((tabId, info) => {
-  if (!info.url) return;
-  shieldsReady.then(() => {
-    if (pendingPopups.has(tabId)) judgePopup(tabId, pendingPopups.get(tabId), info.url);
-    const sh = shields[tabId];
-    if (!sh || !/^https?:/i.test(info.url) || AVD.siteKey(info.url) === sh.site) return;
-    if (Date.now() < sh.guardUntil) {
-      // Hijacked straight after Play safely → put the video page back, once.
-      sh.guardUntil = 0;
-      sh.blocked++;
-      saveShields();
-      api.tabs.goBack(tabId).catch(() => {});
-    } else {
-      delete shields[tabId]; // the user went somewhere else
-      saveShields();
-    }
-  });
+  if (info.url && pendingPopups.has(tabId)) shieldsReady.then(() => judgePopup(tabId, pendingPopups.get(tabId), info.url));
 });
+
+const USER_TRANSITIONS = new Set(['typed', 'auto_bookmark', 'generated', 'keyword', 'keyword_generated', 'reload', 'start_page', 'auto_toplevel']);
+
+if (api.webNavigation && api.webNavigation.onCommitted) {
+  api.webNavigation.onCommitted.addListener((d) => {
+    if (d.frameId !== 0 || !/^https?:/i.test(d.url)) return;
+    shieldsReady.then(() => {
+      const tabId = d.tabId;
+      const prev = tabSites.get(tabId) || (shields[tabId] && shields[tabId].site);
+      const site = AVD.siteKey(d.url);
+      tabSites.set(tabId, site);
+      const q = d.transitionQualifiers || [];
+      const byUser = USER_TRANSITIONS.has(d.transitionType) || q.includes('forward_back') || q.includes('from_address_bar');
+      const allow = allowNav.get(tabId);
+      const confirmed = !!(allow && allow.site === site && Date.now() < allow.until);
+      if (confirmed) allowNav.delete(tabId); // one confirmed click = one pass
+      const allowed = byUser || confirmed;
+
+      if (prev && site !== prev) {
+        // Script/meta/server redirects only — a normal link click isn't suspicious.
+        if (!byUser && (q.includes('client_redirect') || q.includes('server_redirect'))) bumpRisk(prev, 'redirects');
+        const sh = shields[tabId];
+        const guarded = sh && (sh.sketchy || Date.now() < sh.guardUntil);
+        if (guarded && !allowed) {
+          // Hijacked → put the video page back.
+          sh.guardUntil = 0;
+          countBlocked(tabId);
+          tabSites.set(tabId, prev);
+          api.tabs.goBack(tabId).catch(() => {});
+          return;
+        }
+        if (sh && sh.site !== site) {
+          delete shields[tabId]; // the user went somewhere else
+          saveShields();
+        }
+      }
+      if (isSketchy(site) && (!shields[tabId] || !shields[tabId].sketchy)) {
+        shields[tabId] = { site, blocked: (shields[tabId] && shields[tabId].blocked) || 0, guardUntil: 0, sketchy: true };
+        saveShields();
+      }
+    });
+  });
+}
+
+/* sketchy-site guard scripts */
+
+const GUARD_IDS = ['avd-guard', 'avd-guard-main'];
+let ffGuard = null;
+let guardSig = '';
+
+function matchesFor(sites) {
+  return sites.flatMap((s) => (/^[\d.]+$|^localhost$/.test(s) ? [`*://${s}/*`] : [`*://${s}/*`, `*://*.${s}/*`]));
+}
+
+async function syncGuards() {
+  const sites = (settings.sketchySites || []).filter(Boolean);
+  const sig = sites.join('|');
+  if (sig === guardSig) return;
+  guardSig = sig;
+  const matches = matchesFor(sites);
+  try {
+    if (!FIREFOX_ENGINE && api.scripting && api.scripting.registerContentScripts) {
+      const existing = await api.scripting.getRegisteredContentScripts({ ids: GUARD_IDS }).catch(() => []);
+      if (existing.length) await api.scripting.unregisterContentScripts({ ids: existing.map((x) => x.id) });
+      if (!matches.length) return;
+      await api.scripting.registerContentScripts([
+        { id: 'avd-guard', matches, js: ['shared.js', 'guard.js'], runAt: 'document_start', allFrames: true },
+        { id: 'avd-guard-main', matches, js: ['guard-main.js'], runAt: 'document_start', allFrames: true, world: 'MAIN' },
+      ]);
+    } else if (api.contentScripts && api.contentScripts.register) {
+      if (ffGuard) await ffGuard.unregister().catch(() => {});
+      ffGuard = null;
+      if (!matches.length) return;
+      ffGuard = await api.contentScripts.register({ matches, js: [{ file: 'shared.js' }, { file: 'guard.js' }], runAt: 'document_start', allFrames: true });
+    }
+  } catch (e) {
+    guardSig = ''; // retry on the next change
+  }
+}
+
+// Protect the page that's open right now, without a reload.
+async function injectGuard(tabId) {
+  try {
+    if (api.scripting && api.scripting.executeScript && !FIREFOX_ENGINE) {
+      await api.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['guard-main.js'], world: 'MAIN' });
+      await api.scripting.executeScript({ target: { tabId, allFrames: true }, files: ['shared.js', 'guard.js'] });
+    } else {
+      await api.tabs.executeScript(tabId, { file: 'shared.js', allFrames: true });
+      await api.tabs.executeScript(tabId, { file: 'guard.js', allFrames: true });
+    }
+  } catch (e) {}
+}
+
+settingsReady.then(syncGuards);
 
 /* ---------------- Referer / Origin for the engine's requests ---------------- */
 //
@@ -807,6 +949,37 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return candidatesFor(msg.tabId);
       case 'avd:shield':
         return { shield: await setShield(msg.tabId, !!msg.on, !!msg.guard) };
+      case 'avd:risk': {
+        await shieldsReady;
+        return { risk: risk[msg.site] || { popups: 0, redirects: 0 } };
+      }
+      case 'avd:sketchy': {
+        // Mark/unmark the tab's site; protection starts on this page right away.
+        await settingsReady;
+        const sites = new Set(settings.sketchySites || []);
+        if (msg.on) sites.add(msg.site);
+        else sites.delete(msg.site);
+        settings = { ...settings, sketchySites: [...sites] };
+        await api.storage.local.set({ [K.settings]: settings });
+        await syncGuards();
+        if (msg.on && msg.tabId != null) {
+          await injectGuard(msg.tabId);
+          tabSites.set(msg.tabId, msg.site);
+        }
+        if (msg.tabId != null) {
+          if (msg.on) await setShield(msg.tabId, true, false);
+          else if (shields[msg.tabId]) shields[msg.tabId].sketchy = false;
+          saveShields();
+        }
+        return { ok: true, shield: shields[msg.tabId] || null };
+      }
+      // in-page guard → coordinator
+      case 'avd:guard:blocked':
+        if (sender.tab) countBlocked(sender.tab.id);
+        return { ok: true };
+      case 'avd:guard:allow':
+        if (sender.tab) allowNav.set(sender.tab.id, { site: AVD.siteKey(msg.url), until: Date.now() + ALLOW_MS });
+        return { ok: true };
       case 'avd:clearTab':
         await hydrate();
         resetTab(msg.tabId);

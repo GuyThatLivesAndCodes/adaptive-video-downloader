@@ -41,6 +41,10 @@ const state = {
   logOpen: new Set(),
   shield: null,
   safeBusy: false,
+  safeShown: false,
+  pageCaptions: [],
+  risk: null,
+  riskDismissed: false,
 };
 
 /* ---------------- tiny DOM helpers ---------------- */
@@ -228,6 +232,9 @@ function initManual() {
     onMissing: s.onMissing,
     cookies: s.sendCookies,
     referer: s.sendReferer && state.tab ? state.tab.url || '' : '',
+    capOff: new Set(),
+    capFormat: s.captionFormat,
+    capEmbed: s.captionEmbed,
   };
 }
 
@@ -269,13 +276,85 @@ function avdPageProbe() {
       return '';
     }
   };
-  const playButton = !!document.querySelector(
-    '.vjs-big-play-button,.jw-display-icon-container,.plyr__control--overlaid,.fp-play,.mejs__overlay-button,[class*="play-button" i],[class*="playbutton" i],[class*="btn-play" i],button[aria-label*="play" i]'
-  );
+  // A play button = a player's play overlay, or a paused native player showing
+  // its own controls.
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 8 && r.height > 8;
+  };
+  const playButton =
+    [
+      ...document.querySelectorAll(
+        '.vjs-big-play-button,.jw-display-icon-container,.plyr__control--overlaid,.fp-play,.mejs__overlay-button,.ytp-large-play-button,[class*="play-button" i],[class*="playbutton" i],[class*="btn-play" i],[class*="play-btn" i],button[aria-label*="play" i],[role="button"][aria-label*="play" i]'
+      ),
+    ].some(visible) || [...document.querySelectorAll('video')].some((v) => v.paused && v.controls && visible(v));
+
+  // Captions: <track> files, cues a player built in memory, caption files the
+  // page fetched, and caption URLs sitting in inline player configs.
+  const captions = [];
+  for (const t of document.querySelectorAll('video track[src], audio track[src]')) {
+    if (/^(subtitles|captions)$/i.test(t.kind || 'subtitles')) captions.push({ kind: 'file', url: abs(t.getAttribute('src')), lang: t.srclang || '', label: t.label || '' });
+  }
+  const ts = (x) => new Date(Math.max(0, x) * 1000).toISOString().slice(11, 23);
+  for (const v of document.querySelectorAll('video')) {
+    for (const tt of v.textTracks || []) {
+      if (!/^(subtitles|captions)$/.test(tt.kind) || !tt.cues || tt.cues.length < 3) continue;
+      if ([...v.querySelectorAll('track')].some((t) => t.track === tt && t.src)) continue;
+      let text = 'WEBVTT\n\n';
+      for (const c of [...tt.cues].slice(0, 8000)) if (c.text) text += `${ts(c.startTime)} --> ${ts(c.endTime)}\n${c.text}\n\n`;
+      captions.push({ kind: 'text', text, lang: tt.language || '', label: tt.label || '', fromPlayer: true, count: tt.cues.length });
+    }
+  }
+  for (const u of uniq(names.filter((u) => /\.(vtt|webvtt|srt|ttml|dfxp)(\?|#|$)/i.test(u))).slice(-15)) captions.push({ kind: 'file', url: u });
+  let inline = 0;
+  for (const sc of document.querySelectorAll('script:not([src])')) {
+    const t = sc.textContent || '';
+    if (t.length > 3e6 || !/\.(vtt|srt)/i.test(t)) continue;
+    for (const m of t.matchAll(/https?:(?:\\?\/){2}[^"'\s<>]+?\.(?:vtt|srt)(?:\?[^"'\s<>]*)?(?=["'\s<>]|$)/gi)) {
+      if (inline++ > 15) break;
+      captions.push({ kind: 'file', url: m[0].replace(/\\\//g, '/') });
+    }
+  }
+
+  // Risk signals for "Mark as sketchy": pop-under ad networks, and invisible
+  // layers stacked over the page (click-traps).
+  const AD = /(popads|popcash|propellerads|propellerclick|adsterra|exoclick|exosrv|juicyads|hilltopads|onclickads|onclkds|adcash|clickadu|trafficstars|tsyndicate|realsrv|admaven|ad-maven|monetag|galaksion|popmyads|bidvertiser|zeropark|pushground|richpush|clickaine|profitableratecpm|highperformanceformat)/i;
+  const hostOf = (u) => {
+    try {
+      return new URL(u).hostname.replace(/^www\./, '');
+    } catch (e) {
+      return '';
+    }
+  };
+  const adNets = uniq([...[...document.scripts].map((x) => x.src), ...names].filter((u) => u && AD.test(u)).map(hostOf).filter(Boolean)).slice(0, 6);
+  let traps = 0;
+  const seen = new Set();
+  for (const fx of [0.25, 0.5, 0.75]) {
+    for (const fy of [0.3, 0.6]) {
+      for (const el of document.elementsFromPoint(innerWidth * fx, innerHeight * fy)) {
+        if (el.tagName === 'VIDEO' || el === document.body || el === document.documentElement) break;
+        if (seen.has(el)) continue;
+        seen.add(el);
+        const cs = getComputedStyle(el);
+        if (cs.position !== 'fixed' && cs.position !== 'absolute') continue;
+        const r = el.getBoundingClientRect();
+        if ((r.width * r.height) / (innerWidth * innerHeight) < 0.25) continue;
+        let player = !!el.querySelector('video');
+        for (let n = el.parentElement, i = 0; !player && n && n !== document.body && i < 4; n = n.parentElement, i++) player = !!n.querySelector('video');
+        if (player) continue;
+        const empty = !(el.innerText || '').trim() && !el.querySelector('img,svg,canvas,video,input,button');
+        if (parseFloat(cs.opacity) < 0.1 || (empty && /rgba\(.*,\s*0(\.0\d*)?\)|transparent/.test(cs.backgroundColor) && cs.backgroundImage === 'none')) traps++;
+      }
+    }
+  }
+
   return {
     top: window === window.top,
     vids,
-    needsPlay: playButton || vids.some((v) => !v.playing && v.w > 160),
+    needsPlay: playButton,
+    captions,
+    adNets,
+    traps,
     iw: innerWidth,
     ih: innerHeight,
     ogTitle: meta('og:title') || meta('twitter:title'),
@@ -318,6 +397,9 @@ async function probePage() {
     video,
     duration: video ? video.duration : 0,
     needsPlay: frames.some((f) => f.needsPlay) && !all.some((v) => v.playing),
+    captions: frames.flatMap((f) => f.captions || []),
+    adNets: [...new Set(frames.flatMap((f) => f.adNets || []))],
+    traps: frames.reduce((n, f) => n + (f.traps || 0), 0),
     srcs: all.map((v) => v.src).filter((s) => /^https?:/i.test(s)),
     manifests: frames.flatMap((f) => f.manifests || []),
     files: frames.flatMap((f) => f.files || []),
@@ -513,6 +595,7 @@ async function safePlay(btn) {
   };
   if (btn) btn.disabled = true;
   try {
+    state.safeShown = true;
     say('busy', 'Starting the video for you…');
     if (state.settings.shieldWithSafePlay) await setShield(true, true);
     let r;
@@ -563,10 +646,11 @@ async function setShield(on, guard) {
 function renderShield() {
   const sh = state.shield;
   $('shieldToggle').checked = !!sh;
+  $('shieldToggle').closest('.safe-row').hidden = isSketchy(); // always on there
   const n = sh ? sh.blocked : 0;
   $('shieldCount').textContent = sh ? (n ? `${n} blocked` : 'On') : '';
   $('shieldChip').hidden = !sh || state.view !== 'download';
-  $('shieldChipText').textContent = n ? `${n} blocked` : 'Shield on';
+  $('shieldChipText').textContent = (isSketchy() ? 'Protected' : 'Shield on') + (n ? ` · ${n}` : '');
 }
 
 function loadImage(src) {
@@ -814,11 +898,196 @@ async function describe(c) {
       variants: d.variants,
       audios: d.audios,
       childUrls: d.childUrls || [],
+      captions: (d.captions || []).map(normCaption),
     });
   } catch (e) {
     c.status = 'error';
     c.error = (e && e.message) || 'error';
   }
+}
+
+/* ---------------- captions ---------------- */
+
+function normCaption(c) {
+  const lang = c.lang || AVD_Captions.guessLang(c.label, c.url);
+  return {
+    ...c,
+    id: c.kind === 'text' ? 'c:t:' + lang + ':' + (c.label || '') + ':' + (c.count || 0) : 'c:' + bare(c.url),
+    lang,
+    status: c.kind === 'file' ? 'checking' : 'ready',
+  };
+}
+
+// Page-level captions (tracks, fetched files, inline configs) apply to every
+// source; a manifest's own subtitle renditions only to that manifest. Cues a
+// player built in memory may be incomplete, so they only fill missing languages.
+function captionsFor(c) {
+  const out = [];
+  const seen = new Set();
+  for (const x of [...((c && c.captions) || []), ...state.pageCaptions]) {
+    if (seen.has(x.id) || x.status === 'bad') continue;
+    seen.add(x.id);
+    out.push(x);
+  }
+  return out.filter((x) => !x.fromPlayer || !out.some((y) => y !== x && !y.fromPlayer && y.lang === x.lang));
+}
+
+// Fetch each caption file once: count its lines, and drop look-alikes (HLS
+// subtitle segments, empty or broken files).
+async function checkCaption(cap) {
+  try {
+    const { text } = await AVD_Manifest.fetchText(cap.url, { timeout: 8 });
+    const parsed = AVD_Captions.parseAny(text);
+    const end = parsed.cues.length ? parsed.cues[parsed.cues.length - 1].end : 0;
+    if (!parsed.cues.length || (parsed.map && end - parsed.cues[0].start < 60)) cap.status = 'bad';
+    else {
+      cap.status = 'ready';
+      cap.count = parsed.cues.length;
+      cap.end = end;
+    }
+  } catch (e) {
+    cap.status = 'bad';
+  }
+}
+
+function captionName(cap) {
+  return AVD_Captions.labelOf(cap) + (cap.fromPlayer ? ' (from player)' : '');
+}
+
+function captionSub(cap) {
+  const where = cap.kind === 'hls' ? 'Stream subtitles' : cap.fromPlayer ? 'Loaded by the player — may be partial' : cap.kind === 'text' ? 'From the page' : 'Caption file';
+  const lang = cap.lang ? AVD_Captions.langName(cap.lang) : '';
+  return [cap.label && lang !== cap.label ? lang : '', cap.count ? cap.count + ' lines' : '', where].filter(Boolean).join(' · ');
+}
+
+function captionSource(cap) {
+  return { kind: cap.kind, url: cap.url, text: cap.text, lang: cap.lang, label: cap.label };
+}
+
+// Save captions straight away, no video needed.
+async function saveCaptionsNow(caps, btn) {
+  if (!caps.length) return;
+  const fmt = state.mode === 'manual' ? state.manual.capFormat : state.settings.captionFormat;
+  const base = AVD.sanitizeFilename(state.title || 'captions');
+  const folder = AVD.sanitizeFolder(state.settings.subfolder);
+  if (btn) btn.disabled = true;
+  let ok = 0;
+  try {
+    for (const [i, cap] of caps.entries()) {
+      try {
+        const r = await AVD_Captions.render(captionSource(cap), fmt, { timeout: 15 });
+        const tag = cap.lang || (caps.length > 1 ? 'track' + (i + 1) : '');
+        const url = URL.createObjectURL(new Blob([r.text], { type: fmt === 'vtt' ? 'text/vtt' : 'application/x-subrip' }));
+        await api.downloads.download({ url, filename: (folder ? folder + '/' : '') + base + (tag ? '.' + tag : '') + '.' + r.ext, conflictAction: 'uniquify', saveAs: false });
+        ok++;
+      } catch (e) {}
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+  toast(ok ? `Saved ${ok} caption file${ok === 1 ? '' : 's'} (.${fmt})` : 'Couldn’t download those captions');
+}
+
+/* ---------------- sketchy sites ---------------- */
+
+function isSketchy() {
+  return (state.settings.sketchySites || []).includes(AVD.siteKey((state.tab && state.tab.url) || ''));
+}
+
+function riskInfo() {
+  const p = state.page || {};
+  const r = state.risk || {};
+  const blocked = (state.shield && state.shield.blocked) || 0;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const reasons = [];
+  if (r.popups) reasons.push(plural(r.popups, 'pop-up'));
+  if (r.redirects) reasons.push(plural(r.redirects, 'redirect'));
+  if (p.traps) reasons.push(plural(p.traps, 'hidden click-trap'));
+  if (blocked) reasons.push(`${blocked} blocked by the shield`);
+  if (p.adNets && p.adNets.length) reasons.push(`pop-up ad network${p.adNets.length > 1 ? 's' : ''} (${p.adNets.slice(0, 2).join(', ')})`);
+  // One stray pop-up or redirect isn't enough on its own; a click-trap or a
+  // shield block is.
+  const score = (r.popups || 0) + (r.redirects || 0) + 2 * ((p.traps || 0) + blocked) + Math.min((p.adNets || []).length, 3);
+  return { score, reasons };
+}
+
+async function loadRisk() {
+  if (!state.tab || !/^https?:/i.test(state.tab.url || '')) return;
+  const site = AVD.siteKey(state.tab.url);
+  const [r, d] = await Promise.all([send({ type: 'avd:risk', site }), api.storage.session.get('avd:riskDismissed').catch(() => ({}))]);
+  state.risk = (r && r.risk) || null;
+  state.riskDismissed = ((d && d['avd:riskDismissed']) || []).includes(site);
+  renderRisk();
+}
+
+async function markSketchy(on) {
+  const site = AVD.siteKey(state.tab.url);
+  const r = await send({ type: 'avd:sketchy', tabId: state.tab.id, site, on });
+  const sites = new Set(state.settings.sketchySites || []);
+  if (on) sites.add(site);
+  else sites.delete(site);
+  state.settings.sketchySites = [...sites];
+  if (r && 'shield' in r) state.shield = r.shield;
+  toast(on ? `${site} marked as sketchy — protection is on` : `${site} is no longer marked`);
+  renderShield();
+  renderRisk();
+  renderSketchyList();
+}
+
+function renderRisk() {
+  const card = $('riskCard');
+  const web = state.tab && /^https?:/i.test(state.tab.url || '');
+  if (!web || state.locked) return (card.hidden = true);
+  const sketchy = isSketchy();
+  const { score, reasons } = riskInfo();
+  card.classList.toggle('protected', sketchy);
+  if (sketchy) {
+    card.hidden = false;
+    const n = (state.shield && state.shield.blocked) || 0;
+    $('riskTitle').textContent = 'Protected site';
+    $('riskSub').textContent = `Ad links, pop-ups, redirects and hidden click-traps are blocked here${n ? ` · ${n} blocked on this tab` : ''}.`;
+    $('riskMark').hidden = true;
+    $('riskDismiss').textContent = 'Unmark';
+    return;
+  }
+  card.hidden = score < 2 || state.riskDismissed;
+  $('riskTitle').textContent = 'This site looks sketchy';
+  $('riskSub').textContent = `Detected ${reasons.join(', ')}. Mark it to block ad links, pop-ups and redirects every time you visit.`;
+  $('riskMark').hidden = false;
+  $('riskDismiss').textContent = 'Not now';
+}
+
+function renderSketchyList() {
+  const list = $('sketchyList');
+  const sites = state.settings.sketchySites || [];
+  list.replaceChildren(
+    ...(sites.length
+      ? sites.map((site) =>
+          h(
+            'div',
+            { class: 'row' },
+            h('span', { class: 'row-title', text: site }),
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'round-btn',
+                title: 'Remove',
+                'aria-label': 'Remove ' + site,
+                onclick: async () => {
+                  await send({ type: 'avd:sketchy', site, on: false, tabId: state.tab && AVD.siteKey(state.tab.url) === site ? state.tab.id : null });
+                  state.settings.sketchySites = (state.settings.sketchySites || []).filter((x) => x !== site);
+                  renderSketchyList();
+                  renderRisk();
+                  renderShield();
+                },
+              },
+              icon('i-x')
+            )
+          )
+        )
+      : [h('div', { class: 'row-note pad top', text: 'No sites yet. Adaptive suggests marking one when it throws pop-ups or redirects at you.' })])
+  );
 }
 
 async function verifyTemplate(c) {
@@ -856,6 +1125,12 @@ async function scan() {
   renderDownload();
 
   if (state.candidates.length) ensureThumb();
+  const known = new Set();
+  state.pageCaptions = [...((page && page.captions) || []), ...((resp && resp.captions) || []).map((c) => ({ kind: 'file', url: c.url }))]
+    .map(normCaption)
+    .filter((c) => (known.has(c.id) ? false : known.add(c.id)));
+  Promise.all(state.pageCaptions.filter((c) => c.status === 'checking').slice(0, 15).map(checkCaption)).then(renderDownload);
+  loadRisk();
   const pending = state.candidates.filter((c) => c.status === 'loading');
   // Preview with the page as Referer, like the real download will.
   const ref = state.settings.sendReferer && /^https?:/i.test(tab.url || '') ? tab.url : '';
@@ -977,10 +1252,16 @@ function makeJob(c, mode) {
         saveAs: s.saveAs,
       };
 
+  const caps = captionsFor(c).filter((x) => x.status === 'ready' && (manual ? !m.capOff.has(x.id) : s.captions));
+  options.captionFormat = manual ? m.capFormat : s.captionFormat;
+  options.captionEmbed = manual ? m.capEmbed : s.captionEmbed;
+  options.captionSidecar = true;
+
   return {
     id: AVD.uid('job'),
     mode,
     title,
+    captions: options.format === 'audio' ? [] : caps.map(captionSource),
     filename,
     site,
     pageUrl: state.tab.url || '',
@@ -1027,6 +1308,7 @@ function renderDownload() {
   if (!locked && state.mode === 'auto' && has) renderAuto();
   if (!locked && state.mode === 'manual') renderManual();
   renderSafe();
+  renderRisk();
   renderCta();
 }
 
@@ -1034,14 +1316,15 @@ function renderDownload() {
 function renderSafe() {
   const web = state.tab && /^https?:/i.test(state.tab.url || '');
   const card = $('safePlay');
-  card.hidden = !!state.locked || !web || (state.scanning && !state.candidates.length);
+  const playButton = !!(state.page && state.page.needsPlay);
+  card.hidden = !!state.locked || !web || !(playButton || state.safeBusy || state.safeShown);
   const compact = state.candidates.length > 0;
   card.classList.toggle('compact', compact);
   $('safeTitle').textContent = compact ? 'Wrong video, or ads in the way?' : 'Play button sends you to ads?';
   $('safeSub').textContent = compact
     ? 'Let Adaptive start the real video — no clicks on the page.'
     : 'Let Adaptive start the video for you. Fake play buttons and pop-ups can’t hijack it.';
-  $('safeHint').hidden = !(state.page && state.page.needsPlay) || compact;
+  $('safeHint').hidden = !playButton || compact;
   card.classList.toggle('top', compact && state.mode === 'manual');
   $('emptyState').classList.toggle('slim', !card.hidden);
 }
@@ -1082,6 +1365,15 @@ function renderAuto() {
       .filter(Boolean)
       .map((t) => h('span', { text: t }))
   );
+
+  const caps = captionsFor(c).filter((x) => x.status === 'ready');
+  $('heroCC').hidden = !caps.length;
+  if (caps.length) {
+    const langs = [...new Set(caps.map((x) => AVD_Captions.labelOf(x)))];
+    $('heroCCText').textContent = langs.slice(0, 3).join(', ') + (langs.length > 3 ? ` +${langs.length - 3}` : '');
+    $('heroCCNote').textContent = state.settings.captions ? `· .${state.settings.captionFormat} included` : '';
+    $('heroCCSave').textContent = state.settings.captions ? 'Save only' : `Save .${state.settings.captionFormat}`;
+  }
 
   const st = $('heroStatus');
   if (c.drm) statusLine(st, 'err', 'DRM-protected — this video can’t be downloaded');
@@ -1220,6 +1512,8 @@ function renderManualOptions() {
     )
   );
 
+  renderCaptionGroup(c);
+
   // output
   formatCtl.set(m.format);
   $('formatNote').textContent = FORMAT_NOTES[m.format] || '';
@@ -1260,6 +1554,49 @@ function renderManualOptions() {
   $('cookiesToggle').checked = m.cookies;
   if (document.activeElement !== $('refererInput')) $('refererInput').value = m.referer;
   missingCtl.set(m.onMissing);
+}
+
+function renderCaptionGroup(c) {
+  const m = state.manual;
+  const caps = captionsFor(c).filter((x) => x.status !== 'bad');
+  $('ccGroup').hidden = !caps.length || m.format === 'audio';
+  if (!caps.length) return;
+  $('ccList').replaceChildren(
+    ...caps.map((cap) => {
+      const on = !m.capOff.has(cap.id);
+      const sub = h('div', { class: 'src-sub' });
+      if (cap.status === 'checking') sub.append(h('span', { class: 'spinner mini-spin' }), 'Checking…');
+      else sub.append(captionSub(cap));
+      return h(
+        'div',
+        { class: 'source cc-item' + (on ? ' sel' : '') },
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'cc-toggle',
+            'aria-pressed': on ? 'true' : 'false',
+            title: on ? 'Included with the video' : 'Not included',
+            onclick: () => {
+              if (on) m.capOff.add(cap.id);
+              else m.capOff.delete(cap.id);
+              renderCaptionGroup(c);
+            },
+          },
+          h('span', { class: 'radio' }, icon('i-check')),
+          h('div', { class: 'src-info' }, h('div', { class: 'src-name' }, h('span', { class: 'cc-badge', text: 'CC' }), captionName(cap)), sub)
+        ),
+        h(
+          'button',
+          { type: 'button', class: 'btn-tinted cc-save', disabled: cap.status !== 'ready', title: `Save as .${m.capFormat} now`, onclick: (e) => saveCaptionsNow([cap], e.currentTarget) },
+          icon('i-download'),
+          '.' + m.capFormat
+        )
+      );
+    })
+  );
+  $('ccEmbed').checked = m.capEmbed;
+  $('ccEmbedRow').hidden = m.format === 'original' || (c.type === 'file' && m.format === 'auto');
 }
 
 function renderCta() {
@@ -1760,6 +2097,12 @@ function wireManual() {
     renderManualOptions();
   });
   missingCtl = segmented($('missingSeg'), state.manual.onMissing, (v) => (m().onMissing = v));
+  segmented($('ccFormatSeg'), state.manual.capFormat, (v) => {
+    m().capFormat = v;
+    const c = selected();
+    if (c) renderCaptionGroup(c);
+  });
+  $('ccEmbed').addEventListener('change', (e) => (m().capEmbed = e.target.checked));
   $('qualitySel').addEventListener('change', (e) => {
     m().variantKey = e.target.value;
     renderManualOptions();
@@ -1828,6 +2171,10 @@ function wireSettings() {
   bindSwitch('setNotify', 'notify');
   bindSwitch('setBadge', 'badge');
   bindSwitch('setShieldAuto', 'shieldWithSafePlay');
+  bindSwitch('setCaptions', 'captions');
+  bindSwitch('setCaptionEmbed', 'captionEmbed');
+  segmented($('setCaptionFormat'), s.captionFormat, (v) => saveSettings({ captionFormat: v }));
+  renderSketchyList();
   const tpl = $('setTemplate');
   tpl.value = s.filenameTemplate;
   tpl.addEventListener('input', () => saveSettings({ filenameTemplate: tpl.value.trim() || '{title}' }));
@@ -1897,9 +2244,24 @@ function wireShell() {
   $('safePlayMini').addEventListener('click', (e) => safePlay(e.currentTarget));
   $('shieldToggle').addEventListener('change', (e) => setShield(e.target.checked, false));
   $('shieldChip').addEventListener('click', () => {
+    if (isSketchy()) return toast('This site is marked sketchy — unmark it below to turn protection off');
     setShield(false, false);
     toast('Pop-up shield off for this tab');
   });
+  $('riskMark').addEventListener('click', () => markSketchy(true));
+  $('riskDismiss').addEventListener('click', async () => {
+    if (isSketchy()) return markSketchy(false);
+    state.riskDismissed = true;
+    renderRisk();
+    try {
+      const d = await api.storage.session.get('avd:riskDismissed');
+      const list = (d && d['avd:riskDismissed']) || [];
+      list.push(AVD.siteKey(state.tab.url));
+      await api.storage.session.set({ 'avd:riskDismissed': list });
+    } catch (e) {}
+  });
+  $('heroCCSave').addEventListener('click', (e) => saveCaptionsNow(captionsFor(pickBest()).filter((x) => x.status === 'ready'), e.currentTarget));
+  $('ccSaveAll').addEventListener('click', (e) => saveCaptionsNow(captionsFor(selected()).filter((x) => x.status === 'ready' && !state.manual.capOff.has(x.id)), e.currentTarget));
   $('emptyPaste').addEventListener('click', () => {
     setMode('manual', false);
     setTimeout(() => $('linkInput').focus(), 50);
@@ -1938,6 +2300,12 @@ function wireShell() {
       state.shield = (changes[K.shields].newValue || {})[state.tab.id] || null;
       if (prev && state.shield && state.shield.blocked > prev.blocked) toast('Blocked a pop-up ad');
       renderShield();
+      renderRisk();
+    }
+    if (area === 'local' && changes[K.settings]) {
+      state.settings.sketchySites = (changes[K.settings].newValue || {}).sketchySites || [];
+      renderSketchyList();
+      renderRisk();
     }
     if (area === 'local' && changes[K.history]) {
       state.history = changes[K.history].newValue || [];

@@ -814,6 +814,8 @@
     mkv: 'video/x-matroska',
     ts: 'video/mp2t',
     aac: 'audio/aac',
+    srt: 'application/x-subrip',
+    vtt: 'text/vtt',
   };
 
   // Each attempt is [ext, args]; the first that ffmpeg accepts wins.
@@ -821,7 +823,7 @@
     let lastErr = null;
     for (const [ext, args] of attempts) {
       try {
-        return { blob: await ffRun(ctx, inputs, args, 'out.' + ext), ext };
+        return { blob: await ffRun(ctx, inputs, args, 'out.' + ext), ext, args };
       } catch (e) {
         lastErr = e;
         log(ctx, `ffmpeg → .${ext} failed: ${e.message || e}`);
@@ -854,6 +856,58 @@
     if (!r.ok) log(ctx, `Saving ${file.name} failed${r.error ? ': ' + r.error : ''} — check the browser’s download settings.`);
     else log(ctx, `Saved ${file.name} (${AVD.formatBytes(blob.size)}).`);
     return file;
+  }
+
+  /* ---------------- captions ---------------- */
+
+  async function loadCaptions(ctx) {
+    const list = (ctx.job.captions || []).slice(0, 12);
+    if (!list.length || ctx.opts.format === 'audio' || ctx.ctl.discard) return [];
+    setPhase(ctx, 'processing', 'Fetching captions…');
+    const out = [];
+    for (const c of list) {
+      try {
+        const { cues } = await AVD_Captions.load(c, { credentials: ctx.credentials, timeout: ctx.opts.timeout });
+        if (!cues.length) throw new Error('empty');
+        out.push({ lang: c.lang || '', label: AVD_Captions.labelOf(c), cues });
+        log(ctx, `Captions: ${AVD_Captions.labelOf(c)} (${cues.length} lines).`);
+      } catch (e) {
+        log(ctx, `Captions “${AVD_Captions.labelOf(c)}” couldn’t be loaded (${(e && e.message) || e}).`);
+      }
+    }
+    return out;
+  }
+
+  // Caption files sit next to the video with the same base name, so players
+  // like VLC, mpv and Infuse pick them up automatically ("Movie.en.srt").
+  async function saveCaptions(ctx) {
+    if (!ctx.subs.length || !ctx.opts.captionSidecar || !ctx.files.some((f) => f.ok)) return;
+    const fmt = ctx.opts.captionFormat;
+    const used = new Set();
+    const base = ctx.baseName;
+    for (const [i, c] of ctx.subs.entries()) {
+      let tag = (c.lang || (ctx.subs.length > 1 ? 'track' + (i + 1) : '')).replace(/[^\w-]/g, '');
+      while (tag && used.has(tag)) tag += '_' + (i + 1);
+      used.add(tag);
+      ctx.baseName = base + (tag ? '.' + tag : '');
+      const text = fmt === 'vtt' ? AVD_Captions.toVtt(c.cues) : AVD_Captions.toSrt(c.cues);
+      const f = await save(ctx, new Blob([text]), fmt);
+      f.caption = true;
+    }
+    ctx.baseName = base;
+  }
+
+  // Extra ffmpeg inputs/args that embed the captions as MP4 soft subtitles.
+  function subEmbed(ctx, firstIndex) {
+    if (!ctx.subs.length || !ctx.opts.captionEmbed) return null;
+    const inputs = ctx.subs.map((c, i) => ({ name: `s${i}.vtt`, blob: new Blob([AVD_Captions.toVtt(c.cues)]) }));
+    const ins = inputs.flatMap((x) => ['-i', x.name]);
+    const maps = inputs.flatMap((_, i) => ['-map', `${firstIndex + i}:0`]);
+    const meta = ctx.subs.flatMap((c, i) => {
+      const iso = AVD_Captions.iso3(c.lang);
+      return [...(iso ? [`-metadata:s:s:${i}`, `language=${iso}`] : []), `-metadata:s:s:${i}`, `title=${c.label}`];
+    });
+    return { inputs, ins, maps, tail: ['-c:s', 'mov_text', ...meta] };
   }
 
   async function produce(ctx, outputs) {
@@ -901,9 +955,18 @@
         const muxArgs = ['-i', inputs[0].name, '-i', inputs[1].name, '-map', '0:v:0', '-map', '1:a:0', '-c', 'copy'];
         const webm = video.ext === 'webm' && audio.ext === 'webm';
         const attempts = webm && fmt !== 'mp4' ? [['webm', muxArgs], ['mkv', muxArgs]] : [['mp4', [...muxArgs, '-movflags', '+faststart']], ['mkv', muxArgs]];
+        const sub = !webm || fmt === 'mp4' ? subEmbed(ctx, 2) : null;
+        if (sub) {
+          inputs.push(...sub.inputs);
+          attempts.unshift([
+            'mp4',
+            ['-i', inputs[0].name, '-i', inputs[1].name, ...sub.ins, '-map', '0:v:0', '-map', '1:a:0', ...sub.maps, '-c:v', 'copy', '-c:a', 'copy', ...sub.tail, '-movflags', '+faststart'],
+          ]);
+        }
         try {
           const r = await ffTry(ctx, inputs, attempts);
           ctx.outFormat = r.ext;
+          if (sub && r.args === attempts[0][1]) log(ctx, `Embedded ${ctx.subs.length} caption track(s) in the MP4.`);
           await save(ctx, r.blob, r.ext);
         } catch (e) {
           log(ctx, 'Could not merge audio and video — saving them as two files.');
@@ -924,8 +987,18 @@
         return;
       }
       const inputs = [{ name: 'in.' + src.ext, blob: src.blob }];
+      const attempts = [['mp4', ['-i', inputs[0].name, ...mp4Copy]]];
+      const sub = subEmbed(ctx, 1);
+      if (sub) {
+        inputs.push(...sub.inputs);
+        attempts.unshift([
+          'mp4',
+          ['-i', inputs[0].name, ...sub.ins, '-map', '0:v?', '-map', '0:a?', ...sub.maps, '-dn', '-c:v', 'copy', '-c:a', 'copy', ...sub.tail, '-movflags', '+faststart'],
+        ]);
+      }
       try {
-        const r = await ffTry(ctx, inputs, [['mp4', ['-i', inputs[0].name, ...mp4Copy]]]);
+        const r = await ffTry(ctx, inputs, attempts);
+        if (sub && r.args === attempts[0][1]) log(ctx, `Embedded ${ctx.subs.length} caption track(s) in the MP4.`);
         ctx.outFormat = 'mp4';
         await save(ctx, r.blob, 'mp4');
         if (ctx.opts.keepOriginal && src.ext !== 'mp4') await save(ctx, src.blob, src.ext);
@@ -970,6 +1043,9 @@
       referer: o.referer || '',
       sendCookies: o.sendCookies !== false,
       subfolder: o.subfolder || '',
+      captionFormat: o.captionFormat === 'vtt' ? 'vtt' : 'srt',
+      captionEmbed: o.captionEmbed !== false,
+      captionSidecar: o.captionSidecar !== false,
       saveAs: !!o.saveAs,
     };
   }
@@ -1027,6 +1103,7 @@
       files: [],
       baseName: AVD.sanitizeFilename(job.filename || job.title, 'video'),
       outFormat: '',
+      subs: [],
       quality: job.qualityHint || '',
       duration: 0,
       segments: 0,
@@ -1050,7 +1127,9 @@
         if (ctl.cancelled) status = 'canceled';
         else throw new Error('Nothing could be downloaded. The link may have expired — reload the page and try again.');
       } else {
+        ctx.subs = await loadCaptions(ctx);
         await produce(ctx, outputs);
+        await saveCaptions(ctx);
         if ((ctl.cancelled && !ctx.live) || ctx.partial) status = 'partial';
         if (!ctx.files.some((f) => f.ok)) {
           status = 'failed';
@@ -1208,6 +1287,7 @@
           error: error || '',
           mode: job.mode || 'auto',
           live: ctx.live,
+          captions: ctx.subs.map((c) => c.lang || c.label).filter(Boolean),
           startedAt: a ? a.startedAt : Date.now(),
           finishedAt: Date.now(),
           elapsed,

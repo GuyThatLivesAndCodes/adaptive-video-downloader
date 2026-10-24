@@ -62,6 +62,8 @@ without any real click on the page:
    bubble — its handler runs, document-wide ad listeners never see it.
 
 It runs in every frame (embedded players included), then rescans for the stream.
+The card only appears when the page actually shows a play button (a player's
+play overlay, or a paused native player with controls).
 
 The **pop-up shield** (turned on by Play safely, or by its switch) keeps
 protecting the tab: new tabs or windows it opens to *another* site are closed
@@ -73,6 +75,32 @@ you take the tab to a different site.
 Limits: it can't skip ads that play *inside* the video stream, and a redirect
 triggered by your own later clicks outside the 20-second window isn't undone
 (new ad tabs still are).
+
+### Sketchy sites
+
+Adaptive watches for the usual signs — pop-ups to other sites, script
+redirects, invisible full-page click-traps and known pop-under ad networks — and
+suggests **Mark as sketchy**. Marked sites (listed and removable in Settings)
+are protected on every visit, from the first byte of each page:
+
+- invisible ad layers over the page are found and switched off;
+- `window.open` and scripted link clicks to other sites are refused;
+- links to other sites need a second click within 5 s (a small notice explains);
+- any redirect of the tab to another site that you didn't ask for (typed URL,
+  bookmark, back/forward or a confirmed link) is undone;
+- the pop-up shield is always on.
+
+### Captions
+
+Subtitles are found in HLS playlists (segmented WebVTT, stitched back together
+using `X-TIMESTAMP-MAP`), DASH text tracks, `<track>` elements, caption files
+the page loads, caption URLs in inline player configs, and cues a player built
+in memory. Auto mode shows them on the video card (**CC English, Español**) and
+saves them with the video; Manual mode lets you pick tracks and save any of
+them on their own right away. Files are written as **.srt** or **.vtt** next to
+the video with matching names (`Movie.en.srt`) so players load them
+automatically, and can also be embedded in the MP4 as switchable soft
+subtitles. WebVTT, SRT and TTML/DFXP are understood.
 
 ### Reliability
 
@@ -103,7 +131,8 @@ the page link, or be removed. Detects files that were moved or deleted.
 
 ### Settings
 
-Default mode, default format, pop-up shield with Play safely, filename template (`{title} {site} {quality}
+Default mode, default format, pop-up shield with Play safely, sketchy sites,
+captions (on/off, SRT or WebVTT, embed in MP4), filename template (`{title} {site} {quality}
 {date} {time}`), Downloads subfolder, “ask where to save”, network defaults,
 theme (System / Light / Dark), accent colour, completion notifications, and the
 video-count badge on the toolbar icon.
@@ -139,8 +168,11 @@ push and uploads them as workflow artifacts. Icons are generated with
 src/
   shared.js        settings defaults, storage keys, blocked sites, formatting
                    and filename helpers (loaded by every context)
-  manifest.js      HLS + DASH parsers, quality/audio description for the popup,
-                   and resolution into concrete download tracks for the engine
+  manifest.js      HLS + DASH parsers, quality/audio/subtitle description for the
+                   popup, and resolution into concrete download tracks
+  captions.js      WebVTT / SRT / TTML parsing, HLS subtitle stitching, .srt/.vtt
+  guard.js         sketchy-site guard (click-traps, link confirm, notices)
+  guard-main.js    sketchy-site guard in the page world (window.open, a.click)
   engine.js        the download engine: job queue, AIMD limiter, retries,
                    AES-128, init segments, live recording, ranged file download,
                    ffmpeg.wasm remux/mux/extract, saving, history records

@@ -66,6 +66,7 @@
     if (lines.some((l) => l.startsWith('#EXT-X-STREAM-INF'))) {
       const variants = [];
       const audios = [];
+      const subtitles = [];
       let drm = false;
       const seen = new Set();
       for (let i = 0; i < lines.length; i++) {
@@ -90,7 +91,12 @@
           });
         } else if (l.startsWith('#EXT-X-MEDIA:')) {
           const a = parseAttrs(l.slice(13));
-          if ((a.TYPE || '').toUpperCase() !== 'AUDIO') continue;
+          const type = (a.TYPE || '').toUpperCase();
+          if (type === 'SUBTITLES' && a.URI) {
+            subtitles.push({ url: abs(a.URI), lang: a.LANGUAGE || '', name: a.NAME || '', forced: (a.FORCED || '').toUpperCase() === 'YES' });
+            continue;
+          }
+          if (type !== 'AUDIO') continue;
           audios.push({
             groupId: a['GROUP-ID'] || '',
             name: a.NAME || '',
@@ -104,7 +110,7 @@
         }
       }
       variants.sort((x, y) => y.height - x.height || y.bandwidth - x.bandwidth);
-      return { kind: 'master', variants, audios, drm };
+      return { kind: 'master', variants, audios, subtitles, drm };
     }
 
     const segments = [];
@@ -363,6 +369,7 @@
 
     const videos = [];
     const audios = [];
+    const subtitles = [];
     for (const as of kids(period, 'AdaptationSet')) {
       const asProt = kids(as, 'ContentProtection').length > 0;
       const baseA = applyBase(as, baseP);
@@ -371,8 +378,16 @@
       const asLabel = (labelEl && labelEl.textContent.trim()) || attr(as, 'label') || '';
       for (const rep of kids(as, 'Representation')) {
         const ct = contentTypeOf(as, rep);
-        if (ct !== 'video' && ct !== 'audio') continue;
         const baseR = applyBase(rep, baseA);
+        if (ct === 'text' || ct === 'application') {
+          const mime = attr(rep, 'mimeType') || attr(as, 'mimeType') || '';
+          const segmented = [period, as, rep].some((el) => kid(el, 'SegmentTemplate') || kid(el, 'SegmentList'));
+          if (!segmented && baseR !== baseP && /vtt|ttml|srt|text/i.test(mime + (attr(rep, 'codecs') || '') + baseR)) {
+            subtitles.push({ url: baseR, lang, name: asLabel });
+          }
+          continue;
+        }
+        if (ct !== 'video' && ct !== 'audio') continue;
         const info = {
           repId: attr(rep, 'id') || '',
           bandwidth: parseInt(attr(rep, 'bandwidth') || '0', 10) || 0,
@@ -399,6 +414,7 @@
       duration: periodDur || mpdDur,
       videos: videos.filter((v) => !v.drm),
       audios: audios.filter((a) => !a.drm),
+      subtitles,
       drm,
     };
   }
@@ -481,7 +497,12 @@
           audios: doc.audios
             .filter((a) => a.url)
             .map((a) => ({ key: 'a:' + a.groupId + ':' + a.name + ':' + a.lang, name: a.name, lang: a.lang, isDefault: a.isDefault, groupId: a.groupId })),
-          childUrls: [...doc.variants.map((v) => bare(v.url)), ...doc.audios.filter((a) => a.url).map((a) => bare(a.url))],
+          childUrls: [
+            ...doc.variants.map((v) => bare(v.url)),
+            ...doc.audios.filter((a) => a.url).map((a) => bare(a.url)),
+            ...doc.subtitles.map((t) => bare(t.url)),
+          ],
+          captions: doc.subtitles.map((t) => ({ kind: 'hls', url: t.url, lang: t.lang, label: t.name + (t.forced ? ' (forced)' : '') })),
         };
         // Peek at the top variant for duration / live / encryption.
         if (doc.variants[0]) {
@@ -512,6 +533,7 @@
         fmp4: doc.fmp4,
         variants: [],
         audios: [],
+        captions: [],
       };
     }
     return {
@@ -532,6 +554,7 @@
         codecs: v.codecs,
       })),
       audios: doc.audios.map((a) => ({ key: 'r:' + a.repId, name: a.name, lang: a.lang, bandwidth: a.bandwidth, codecs: a.codecs })),
+      captions: doc.subtitles.map((t) => ({ kind: 'file', url: t.url, lang: t.lang, label: t.name })),
     };
   }
 

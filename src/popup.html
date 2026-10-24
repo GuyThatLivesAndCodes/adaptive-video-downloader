@@ -91,6 +91,18 @@
           </div>
         </div>
 
+        <!-- Sketchy-site suggestion / protected-site status -->
+        <section id="riskCard" class="risk glass" hidden>
+          <div class="safe-head">
+            <div class="risk-icon"><svg class="warn"><use href="#i-alert"/></svg><svg class="ok"><use href="#i-shield"/></svg></div>
+            <div class="safe-text"><b id="riskTitle"></b><small id="riskSub"></small></div>
+          </div>
+          <div class="risk-actions">
+            <button class="btn-small risk-mark" id="riskMark" type="button">Mark as sketchy</button>
+            <button class="link-btn" id="riskDismiss" type="button">Not now</button>
+          </div>
+        </section>
+
         <!-- Play safely: start the video without clicking the page -->
         <section id="safePlay" class="safe glass" hidden>
           <div class="safe-head">
@@ -119,6 +131,10 @@
             <div class="hero-body">
               <h2 class="hero-title" id="heroTitle"></h2>
               <div class="hero-meta" id="heroMeta"></div>
+              <div class="cc-row" id="heroCC" hidden>
+                <span class="cc-badge">CC</span><span class="cc-langs" id="heroCCText"></span><span class="cc-note" id="heroCCNote"></span>
+                <button class="link-btn" id="heroCCSave" type="button">Save only</button>
+              </div>
               <div class="status-line" id="heroStatus"><span class="dot"></span><span class="txt"></span></div>
               <button class="btn-primary big" id="autoDownload" type="button"><svg><use href="#i-download"/></svg><span>Download</span></button>
               <div class="hero-foot" id="heroFoot"></div>
@@ -145,6 +161,22 @@
               <div class="group glass">
                 <label class="row" id="rowQuality"><span class="row-title">Quality</span><span class="select-wrap"><select id="qualitySel"></select></span></label>
                 <label class="row" id="rowAudio"><span class="row-title">Audio track</span><span class="select-wrap"><select id="audioSel"></select></span></label>
+              </div>
+            </div>
+
+            <div id="ccGroup" hidden>
+              <div class="section-label"><span>Captions</span><button class="link-btn" id="ccSaveAll" type="button">Save selected now</button></div>
+              <div class="group glass" id="ccList"></div>
+              <div class="group glass">
+                <div class="row col">
+                  <span class="row-title">Caption format<small>Saved next to the video with the same name, so players load them automatically</small></span>
+                  <div class="segmented small" id="ccFormatSeg">
+                    <span class="seg-thumb"></span>
+                    <button type="button" data-value="srt">SRT</button>
+                    <button type="button" data-value="vtt">WebVTT</button>
+                  </div>
+                </div>
+                <label class="row" id="ccEmbedRow"><span class="row-title">Also embed in the MP4<small>Soft subtitles you can toggle in the player</small></span><input type="checkbox" class="switch" id="ccEmbed" /></label>
               </div>
             </div>
 
@@ -320,6 +352,22 @@
         <div class="group glass">
           <label class="row"><span class="row-title">Pop-up shield with Play safely<small>Closes tabs other sites open and undoes ad redirects</small></span><input type="checkbox" class="switch" id="setShieldAuto" /></label>
         </div>
+        <div class="section-label"><span>Sketchy sites</span></div>
+        <div class="group glass" id="sketchyList"></div>
+
+        <div class="section-label"><span>Captions</span></div>
+        <div class="group glass">
+          <label class="row"><span class="row-title">Download captions with videos<small>Subtitles found on the page or in the stream</small></span><input type="checkbox" class="switch" id="setCaptions" /></label>
+          <div class="row col">
+            <span class="row-title">Caption format</span>
+            <div class="segmented small" id="setCaptionFormat">
+              <span class="seg-thumb"></span>
+              <button type="button" data-value="srt">SRT</button>
+              <button type="button" data-value="vtt">WebVTT</button>
+            </div>
+          </div>
+          <label class="row"><span class="row-title">Also embed captions in MP4s</span><input type="checkbox" class="switch" id="setCaptionEmbed" /></label>
+        </div>
 
         <div class="section-label"><span>Data</span></div>
         <div class="group glass">
@@ -349,6 +397,7 @@
 
   <script src="shared.js"></script>
   <script src="manifest.js"></script>
+  <script src="captions.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

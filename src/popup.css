@@ -364,6 +364,37 @@ body.locked .b3 { background: #ff9f7a; }
 }
 .shield-chip svg { width: 11px; height: 11px; stroke-width: 2.4; }
 
+/* ---------- sketchy sites ---------- */
+#riskCard { order: 2; }
+#riskCard.protected { order: 7; }
+.risk { border-radius: var(--r-lg); padding: 14px; margin-top: 4px; margin-bottom: 8px; border-color: color-mix(in srgb, var(--orange) 45%, var(--glass-border)); background: color-mix(in srgb, var(--orange) 9%, var(--glass)); }
+.risk.protected { margin-top: 12px; margin-bottom: 0; padding: 11px 12px; border-color: var(--glass-border); background: var(--glass); }
+.risk-icon { width: 38px; height: 38px; border-radius: 11px; flex: none; display: grid; place-items: center; color: #fff; background: linear-gradient(145deg, #ff9f0a, #ff3b30); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 18px -10px #ff3b30; }
+.risk-icon svg { width: 20px; height: 20px; }
+.risk-icon .ok, .risk.protected .risk-icon .warn { display: none; }
+.risk.protected .risk-icon .ok { display: block; width: 17px; height: 17px; }
+.risk.protected .risk-icon { width: 32px; height: 32px; border-radius: 9px; background: linear-gradient(145deg, #34c759, #00a3c4); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35); }
+.risk.protected .safe-text b { font-size: 12.5px; }
+.risk.protected .safe-text small { font-size: 11.5px; }
+.risk-actions { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+.risk.protected .risk-actions { margin-top: 6px; padding-left: 43px; }
+.risk-mark { background: linear-gradient(180deg, #ff9f0a, #ff6a00); height: 32px; padding: 0 14px; }
+.row-note.top { padding-top: 12px; padding-bottom: 12px; }
+
+/* ---------- captions ---------- */
+.cc-badge { display: inline-grid; place-items: center; height: 15px; padding: 0 4px; margin-right: 6px; border-radius: 4px; border: 1.5px solid currentColor; font-size: 8.5px; font-weight: 800; letter-spacing: 0.3px; vertical-align: 1px; color: var(--text-2); }
+.cc-row { display: flex; align-items: center; gap: 6px; margin-top: 7px; font-size: 12px; color: var(--text-2); min-width: 0; }
+.cc-row .cc-badge { margin-right: 0; flex: none; }
+.cc-langs { color: var(--text); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.cc-note { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-3); min-width: 0; flex: 1; }
+.cc-row .link-btn { margin-left: auto; flex: none; }
+.cc-item { padding: 0 10px 0 0; cursor: default; }
+.cc-toggle { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 10px 0 10px 12px; border: 0; background: none; text-align: left; }
+.cc-item .radio { order: -1; }
+.cc-item:not(.sel) .src-name { color: var(--text-2); }
+.cc-save { height: 28px; padding: 0 9px; font-size: 11.5px; flex: none; }
+.cc-save svg { width: 13px; height: 13px; }
+
 /* ---------- active downloads ---------- */
 .active-area:empty { display: none; }
 .active-area { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
